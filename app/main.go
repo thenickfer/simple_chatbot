@@ -13,9 +13,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/wailsapp/wails/v2"
-	"github.com/wailsapp/wails/v2/pkg/options"
-	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
+	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
 //go:embed all:frontend/dist
@@ -30,22 +28,22 @@ func main() {
 		httpAddr = strings.TrimSpace(os.Getenv("HTTP_ADDR"))
 	}
 
-	app, err := NewApp()
+	appService, err := NewApp()
 	if err != nil {
 		log.Fatalf("Failed to initialize GPU Assistant app: %v", err)
 	}
 
 	frontendFS := resolveFrontendFS()
 	staticHandler := http.FileServer(http.FS(frontendFS))
-	combinedHandler := app.APIHandler(staticHandler)
+	combinedHandler := appService.APIHandler(staticHandler)
 
 	// If --http-addr / HTTP_ADDR is provided, serve the HTTP JSON API + static frontend directly
 	// (useful for headless browser, Playwright, and smoke tests without an X11/Wayland display).
 	if httpAddr != "" {
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
-		app.startup(ctx)
-		defer app.shutdown(ctx)
+		appService.startup(ctx)
+		defer appService.shutdown(ctx)
 
 		srv := &http.Server{
 			Addr:    httpAddr,
@@ -62,26 +60,36 @@ func main() {
 		return
 	}
 
-	// Standard Wails v2 desktop window mode with /api/* middleware fallback attached.
-	err = wails.Run(&options.App{
+	// Standard Wails v3 native desktop window mode (GTK4 + WebKitGTK 6.0 on Linux)
+	// with /api/* JSON endpoints mounted on the internal asset server alongside bound Go services.
+	appService.startup(context.Background())
+
+	wailsApp := application.New(application.Options{
+		Name:        "GPU Lab Assistant",
+		Description: "Cobalt Lab GPU Infrastructure Assistant",
+		Services: []application.Service{
+			application.NewService(appService),
+		},
+		Assets: application.AssetOptions{
+			Handler: appService.APIHandler(application.AssetFileServerFS(frontendFS)),
+		},
+		OnShutdown: func() {
+			appService.shutdown(context.Background())
+		},
+	})
+
+	wailsApp.Window.NewWithOptions(application.WebviewWindowOptions{
 		Title:            "GPU Lab Assistant",
 		Width:            1120,
 		Height:           760,
 		MinWidth:         320,
 		MinHeight:        480,
-		BackgroundColour: &options.RGBA{R: 20, G: 22, B: 26, A: 1},
-		AssetServer: &assetserver.Options{
-			Assets:  frontendFS,
-			Handler: app.APIHandler(nil),
-		},
-		OnStartup:  app.startup,
-		OnShutdown: app.shutdown,
-		Bind: []interface{}{
-			app,
-		},
+		BackgroundColour: application.NewRGB(20, 22, 26),
+		URL:              "/",
 	})
-	if err != nil {
-		log.Fatalf("Wails error: %v", err)
+
+	if err := wailsApp.Run(); err != nil {
+		log.Fatalf("Wails v3 error: %v", err)
 	}
 }
 
