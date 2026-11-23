@@ -1,0 +1,112 @@
+name: Release & Build
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Tag name for manual release build (e.g. v1.0.0)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+      upload_url: ${{ steps.release.outputs.upload_url }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          config-file: .release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  build-and-release:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created == 'true' || github.event.inputs.tag_name != '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache-dependency-path: 'app/go.sum'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache-dependency-path: 'app/frontend/package-lock.json'
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libwebkit2gtk-4.0-dev
+
+      - name: Install Wails CLI
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
+
+      - name: Determine tag name
+        id: vars
+        run: |
+          if [ -n "${{ github.event.inputs.tag_name }}" ]; then
+            echo "tag_name=${{ github.event.inputs.tag_name }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag_name=${{ needs.release-please.outputs.tag_name }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Run frontend tests and build
+        run: |
+          cd app/frontend
+          npm ci || npm install
+          npm test
+          npm run build
+
+      - name: Run backend tests
+        run: |
+          cd app
+          go test -v ./...
+
+      - name: Build Wails Desktop Application
+        run: |
+          cd app
+          wails build -clean -s
+
+      - name: Package release artifact
+        run: |
+          TAG="${{ steps.vars.outputs.tag_name }}"
+          PKG_NAME="gpu-assistant-${TAG}-linux-amd64"
+          mkdir -p "dist/${PKG_NAME}"
+          cp -r app/build/bin/* "dist/${PKG_NAME}/"
+          cp -r deploy "dist/${PKG_NAME}/"
+          cp .env.example "dist/${PKG_NAME}/"
+          cp README.md "dist/${PKG_NAME}/"
+          cd dist
+          tar -czvf "${PKG_NAME}.tar.gz" "${PKG_NAME}"
+          sha256sum "${PKG_NAME}.tar.gz" > "${PKG_NAME}.tar.gz.sha256"
+
+      - name: Upload Artifact to GitHub Actions Run
+        uses: actions/upload-artifact@v4
+        with:
+          name: gpu-assistant-${{ steps.vars.outputs.tag_name }}-linux-amd64
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+
+      - name: Attach Artifacts to GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ steps.vars.outputs.tag_name }}
+        run: |
+          gh release upload "${TAG_NAME}" dist/*.tar.gz dist/*.sha256 --clobber
