@@ -5,7 +5,7 @@ model_list:
   # Primary model alias for the GPU Assistant desktop app
   - model_name: gpu-assistant
     litellm_params:
-      model: ollama_chat/qwen2.5:3b
+      model: os.environ/LITELLM_OLLAMA_MODEL
       api_base: os.environ/OLLAMA_API_BASE
       stream: false
 
