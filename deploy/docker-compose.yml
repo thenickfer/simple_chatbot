@@ -48,7 +48,7 @@ services:
     depends_on:
       ollama:
         condition: service_healthy
-    entrypoint: ["sh", "-c", "echo 'Pulling model ${OLLAMA_MODEL:-qwen2.5:3b} into Ollama...'; ollama pull ${OLLAMA_MODEL:-qwen2.5:3b} && echo 'Model ${OLLAMA_MODEL:-qwen2.5:3b} ready!'"]
+    entrypoint: ["sh", "-c", "if [ \"${OLLAMA_PULL:-true}\" = \"true\" ]; then echo 'Pulling ${OLLAMA_MODEL:-qwen2.5:3b}...'; ollama pull ${OLLAMA_MODEL:-qwen2.5:3b}; else echo 'OLLAMA_PULL=false, skipping model pull'; fi"]
 
   litellm:
     image: ghcr.io/berriai/litellm:main-latest
@@ -61,8 +61,9 @@ services:
     command: ["--config", "/app/config.yaml", "--port", "4000"]
     environment:
       - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY:-sk-local-gpu-assistant}
-      - LITELLM_OLLAMA_MODEL=ollama_chat/${OLLAMA_MODEL:-qwen2.5:3b}
-      - OLLAMA_API_BASE=${OLLAMA_API_BASE:-http://ollama:11434}
+      - LITELLM_UPSTREAM_MODEL=${LITELLM_UPSTREAM_MODEL:-ollama_chat/${OLLAMA_MODEL:-qwen2.5:3b}}
+      - LITELLM_UPSTREAM_API_BASE=${LITELLM_UPSTREAM_API_BASE:-http://ollama:11434}
+      - LITELLM_UPSTREAM_API_KEY=${LITELLM_UPSTREAM_API_KEY:-none}
       - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen2.5:3b}
     depends_on:
       ollama:

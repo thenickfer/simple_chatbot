@@ -88,6 +88,16 @@ make models
 ```
 *Pulls `qwen2.5:3b` (or your configured `OLLAMA_MODEL`) into the Ollama container.*
 
+#### Optional: use OpenCode Zen instead of local Ollama
+Skips the multi-GB model download. Add to `.env`, then `make down && make up`:
+```bash
+LITELLM_UPSTREAM_MODEL=openai/big-pickle
+LITELLM_UPSTREAM_API_BASE=https://opencode.ai/zen/v1
+LITELLM_UPSTREAM_API_KEY=public
+OLLAMA_PULL=false
+```
+The shared `public` key has a free usage limit. When it is exhausted the API returns `FreeUsageLimitError`; switch back to Ollama by removing those lines.
+
 ### 4. Run Smoke Test
 ```bash
 make smoke
