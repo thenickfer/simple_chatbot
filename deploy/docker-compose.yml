@@ -3,6 +3,7 @@ services:
     image: ollama/ollama:latest
     container_name: gpu_assistant_ollama
     restart: unless-stopped
+    profiles: ["test"]
     ports:
       - "${OLLAMA_PORT:-11434}:11434"
     volumes:
@@ -49,6 +50,7 @@ services:
     image: ollama/ollama:latest
     container_name: gpu_assistant_ollama_pull
     restart: "no"
+    profiles: ["test"]
     environment:
       - OLLAMA_HOST=http://ollama:11434
     depends_on:
@@ -77,9 +79,6 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-none}
       - GROQ_API_KEY=${GROQ_API_KEY:-none}
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-none}
-    depends_on:
-      ollama:
-        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "python3 -c 'import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:4000/health/liveliness\")' || exit 1"]
       interval: 5s
@@ -89,3 +88,9 @@ services:
 
 volumes:
   ollama_data:
+
+networks:
+  default:
+    driver: bridge
+    driver_opts:
+      com.docker.network.driver.mtu: "1400"

@@ -50,6 +50,7 @@ func loadSingleEnvFile(path string) {
 	}
 	defer f.Close()
 
+	values := make(map[string]string)
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -68,7 +69,13 @@ func loadSingleEnvFile(path string) {
 				val = val[1 : len(val)-1]
 			}
 		}
-		if key != "" && strings.TrimSpace(os.Getenv(key)) == "" {
+		if key != "" {
+			values[key] = val
+		}
+	}
+
+	for key, val := range values {
+		if strings.TrimSpace(os.Getenv(key)) == "" {
 			_ = os.Setenv(key, val)
 		}
 	}
