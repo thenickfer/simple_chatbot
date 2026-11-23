@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -15,10 +16,11 @@ import (
 )
 
 const (
-	DefaultBaseURL     = "http://127.0.0.1:4000/v1"
-	DefaultAPIKey      = "sk-local-gpu-assistant"
-	DefaultModel       = "gpu-assistant"
-	HealthCheckTimeout = 2500 * time.Millisecond
+	DefaultBaseURL        = "http://127.0.0.1:4000/v1"
+	DefaultAPIKey         = "sk-local-gpu-assistant"
+	DefaultModel          = "gpu-assistant"
+	DefaultRequestTimeout = 600 * time.Second
+	HealthCheckTimeout    = 2500 * time.Millisecond
 )
 
 var loadDotEnvOnce sync.Once
@@ -74,9 +76,10 @@ func loadSingleEnvFile(path string) {
 
 // Config holds the LiteLLM proxy connection parameters.
 type Config struct {
-	BaseURL string `json:"base_url"`
-	APIKey  string `json:"-"`
-	Model   string `json:"model"`
+	BaseURL string        `json:"base_url"`
+	APIKey  string        `json:"-"`
+	Model   string        `json:"model"`
+	Timeout time.Duration `json:"timeout"`
 }
 
 // LoadConfigFromEnv loads LiteLLM configuration from environment variables (and .env files),
@@ -107,10 +110,21 @@ func LoadConfigFromEnv() Config {
 		model = DefaultModel
 	}
 
+	timeout := DefaultRequestTimeout
+	for _, key := range []string{"LITELLM_TIMEOUT_SECONDS", "OLLAMA_TIMEOUT_SECONDS"} {
+		if raw := strings.TrimSpace(os.Getenv(key)); raw != "" {
+			if secs, err := strconv.Atoi(raw); err == nil && secs > 0 {
+				timeout = time.Duration(secs) * time.Second
+				break
+			}
+		}
+	}
+
 	return Config{
 		BaseURL: strings.TrimRight(baseURL, "/"),
 		APIKey:  apiKey,
 		Model:   model,
+		Timeout: timeout,
 	}
 }
 
@@ -141,12 +155,20 @@ func NewClient(cfg Config) (*Client, error) {
 	if strings.TrimSpace(cfg.Model) == "" {
 		cfg.Model = DefaultModel
 	}
+	if cfg.Timeout <= 0 {
+		cfg.Timeout = DefaultRequestTimeout
+	}
 	cfg.BaseURL = strings.TrimRight(cfg.BaseURL, "/")
+
+	llmHTTPClient := &http.Client{
+		Timeout: cfg.Timeout,
+	}
 
 	model, err := openai.New(
 		openai.WithBaseURL(cfg.BaseURL),
 		openai.WithToken(cfg.APIKey),
 		openai.WithModel(cfg.Model),
+		openai.WithHTTPClient(llmHTTPClient),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create langchaingo openai client: %w", err)
@@ -174,6 +196,14 @@ func (c *Client) Config() Config {
 // Model returns the configured model alias.
 func (c *Client) Model() string {
 	return c.cfg.Model
+}
+
+// Timeout returns the configured LLM generation timeout.
+func (c *Client) Timeout() time.Duration {
+	if c == nil || c.cfg.Timeout <= 0 {
+		return DefaultRequestTimeout
+	}
+	return c.cfg.Timeout
 }
 
 // GenerateContent delegates to langchaingo's openai.LLM.GenerateContent.

@@ -108,7 +108,11 @@ func (a *App) SendMessage(text string) (ChatResponse, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	ctx, cancel := context.WithTimeout(a.baseContext(), 90*time.Second)
+	timeout := llm.DefaultRequestTimeout
+	if a.llmClient != nil {
+		timeout = a.llmClient.Timeout()
+	}
+	ctx, cancel := context.WithTimeout(a.baseContext(), timeout)
 	defer cancel()
 
 	res, err := a.agent.Chat(ctx, text)
