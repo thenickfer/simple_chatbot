@@ -1,11 +1,13 @@
 package llm
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tmc/langchaingo/llms"
@@ -19,6 +21,57 @@ const (
 	HealthCheckTimeout = 2500 * time.Millisecond
 )
 
+var loadDotEnvOnce sync.Once
+
+// LoadDotEnvFiles loads environment variables from .env / ../.env (and .env.example / ../.env.example
+// as fallback) if they are not already set in the process environment. This ensures running `go run .`
+// inside `app/` or running the compiled binary from the root directory picks up the exact same `.env`
+// as `docker compose`.
+func LoadDotEnvFiles() {
+	loadDotEnvOnce.Do(func() {
+		candidates := []string{
+			".env",
+			"../.env",
+			".env.example",
+			"../.env.example",
+		}
+		for _, path := range candidates {
+			loadSingleEnvFile(path)
+		}
+	})
+}
+
+func loadSingleEnvFile(path string) {
+	f, err := os.Open(path)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		line = strings.TrimPrefix(line, "export ")
+		idx := strings.Index(line, "=")
+		if idx <= 0 {
+			continue
+		}
+		key := strings.TrimSpace(line[:idx])
+		val := strings.TrimSpace(line[idx+1:])
+		if len(val) >= 2 {
+			if (val[0] == '"' && val[len(val)-1] == '"') || (val[0] == '\'' && val[len(val)-1] == '\'') {
+				val = val[1 : len(val)-1]
+			}
+		}
+		if key != "" && strings.TrimSpace(os.Getenv(key)) == "" {
+			_ = os.Setenv(key, val)
+		}
+	}
+}
+
 // Config holds the LiteLLM proxy connection parameters.
 type Config struct {
 	BaseURL string `json:"base_url"`
@@ -26,9 +79,11 @@ type Config struct {
 	Model   string `json:"model"`
 }
 
-// LoadConfigFromEnv loads LiteLLM configuration from environment variables,
+// LoadConfigFromEnv loads LiteLLM configuration from environment variables (and .env files),
 // falling back to sensible local defaults matching .env.example.
 func LoadConfigFromEnv() Config {
+	LoadDotEnvFiles()
+
 	baseURL := strings.TrimSpace(os.Getenv("LITELLM_BASE_URL"))
 	if baseURL == "" {
 		port := strings.TrimSpace(os.Getenv("LITELLM_PORT"))
@@ -126,7 +181,7 @@ func (c *Client) GenerateContent(ctx context.Context, messages []llms.MessageCon
 	return c.llm.GenerateContent(ctx, messages, options...)
 }
 
-// CheckHealth probes the LiteLLM proxy (/health/liveliness and /v1/models) with a fast timeout (2.5s)
+// CheckHealth probes the LiteLLM proxy (/v1/models and /health/liveliness) with a fast timeout (2.5s)
 // so the Wails UI never blocks or crashes when the proxy is offline.
 func (c *Client) CheckHealth(ctx context.Context) HealthStatus {
 	start := time.Now()
@@ -140,9 +195,11 @@ func (c *Client) CheckHealth(ctx context.Context) HealthStatus {
 	defer cancel()
 
 	rootURL := strings.TrimSuffix(c.cfg.BaseURL, "/v1")
+	// Check authenticated /v1/models first so an authentication mismatch is caught early,
+	// falling back to /health/liveliness.
 	endpoints := []string{
-		rootURL + "/health/liveliness",
 		c.cfg.BaseURL + "/models",
+		rootURL + "/health/liveliness",
 	}
 
 	var lastErr error
@@ -162,6 +219,12 @@ func (c *Client) CheckHealth(ctx context.Context) HealthStatus {
 			continue
 		}
 		_ = resp.Body.Close()
+
+		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+			status.LatencyMs = time.Since(start).Milliseconds()
+			status.Error = fmt.Sprintf("LiteLLM authentication error (HTTP %d): check LITELLM_MASTER_KEY and restart `make down && make up`", resp.StatusCode)
+			return status
+		}
 
 		if resp.StatusCode >= 200 && resp.StatusCode < 400 {
 			status.Online = true

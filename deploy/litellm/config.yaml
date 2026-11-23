@@ -5,8 +5,8 @@ model_list:
   # Primary model alias for the GPU Assistant desktop app
   - model_name: gpu-assistant
     litellm_params:
-      model: ollama_chat/${OLLAMA_MODEL:-qwen2.5:3b}
-      api_base: ${OLLAMA_API_BASE:-http://ollama:11434}
+      model: ollama_chat/qwen2.5:3b
+      api_base: os.environ/OLLAMA_API_BASE
       stream: false
 
   # Optional fallback / alternate hosted models (uncomment and supply API key in .env if desired):
@@ -20,4 +20,4 @@ litellm_settings:
   set_verbose: false
 
 general_settings:
-  master_key: ${LITELLM_MASTER_KEY:-sk-local-gpu-assistant}
+  master_key: os.environ/LITELLM_MASTER_KEY

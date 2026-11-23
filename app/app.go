@@ -52,6 +52,7 @@ type App struct {
 
 // NewApp creates and initializes a new App instance with SQLite store, LiteLLM client, and Agent.
 func NewApp() (*App, error) {
+	llm.LoadDotEnvFiles()
 	ctx := context.Background()
 	st, err := store.OpenFromEnv(ctx)
 	if err != nil {
