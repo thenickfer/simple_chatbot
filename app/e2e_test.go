@@ -8,9 +8,11 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // openAIChatRequest models the wire payload sent by langchaingo/llms/openai to /v1/chat/completions.
@@ -400,5 +402,100 @@ func TestEndToEndAppFourConversationsAndPersistence(t *testing.T) {
 	}
 	if statusAfterClear.GPUCount != 5 {
 		t.Fatalf("expected 5 seeded GPUs to remain intact after ClearConversation, got %d", statusAfterClear.GPUCount)
+	}
+}
+
+func TestCompiledBinaryStandaloneHTTPMode(t *testing.T) {
+	mockLiteLLM := startMockLiteLLMServer(t)
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "binary_test.db")
+	binPath := filepath.Join(tmpDir, "gpu-assistant-bin")
+
+	buildCmd := exec.Command("go", "build", "-o", binPath, ".")
+	if out, err := buildCmd.CombinedOutput(); err != nil {
+		t.Fatalf("go build binary failed: %v\n%s", err, string(out))
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	addr := "127.0.0.1:34199"
+	srvCmd := exec.CommandContext(ctx, binPath, "--http-addr", addr)
+	srvCmd.Env = append(srvCmd.Environ(),
+		"LITELLM_BASE_URL="+mockLiteLLM.URL+"/v1",
+		"LITELLM_API_KEY=sk-test-bin",
+		"LITELLM_MODEL=gpu-assistant",
+		"SQLITE_PATH="+dbPath,
+	)
+	if err := srvCmd.Start(); err != nil {
+		t.Fatalf("start binary failed: %v", err)
+	}
+	defer func() {
+		cancel()
+		_ = srvCmd.Wait()
+	}()
+
+	baseURL := "http://" + addr
+	var ready bool
+	for i := 0; i < 40; i++ {
+		resp, err := http.Get(baseURL + "/api/status")
+		if err == nil {
+			_ = resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				ready = true
+				break
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !ready {
+		t.Fatalf("binary server did not become ready on %s", baseURL)
+	}
+
+	// 1. GET /api/status
+	stResp, err := http.Get(baseURL + "/api/status")
+	if err != nil {
+		t.Fatalf("GET /api/status: %v", err)
+	}
+	var st StatusDTO
+	_ = json.NewDecoder(stResp.Body).Decode(&st)
+	_ = stResp.Body.Close()
+	if !st.Online || st.GPUCount != 5 || st.Model != "gpu-assistant" {
+		t.Fatalf("unexpected binary /api/status: %+v", st)
+	}
+
+	// 2. POST /api/chat
+	chatBody, _ := json.Marshal(map[string]string{"text": "Existem duas A100 disponíveis?"})
+	cResp, err := http.Post(baseURL+"/api/chat", "application/json", bytes.NewReader(chatBody))
+	if err != nil {
+		t.Fatalf("POST /api/chat: %v", err)
+	}
+	var cr ChatResponse
+	_ = json.NewDecoder(cResp.Body).Decode(&cr)
+	_ = cResp.Body.Close()
+	if !strings.Contains(cr.Reply, "NVIDIA A100") || len(cr.ToolCalls) != 1 || cr.ToolCalls[0] != "check_availability" {
+		t.Fatalf("unexpected binary /api/chat response: %+v", cr)
+	}
+
+	// 3. GET /api/history
+	hResp, err := http.Get(baseURL + "/api/history")
+	if err != nil {
+		t.Fatalf("GET /api/history: %v", err)
+	}
+	var hist []MessageDTO
+	_ = json.NewDecoder(hResp.Body).Decode(&hist)
+	_ = hResp.Body.Close()
+	if len(hist) != 2 {
+		t.Fatalf("expected 2 history messages from binary, got %d", len(hist))
+	}
+
+	// 4. POST /api/clear
+	clResp, err := http.Post(baseURL+"/api/clear", "application/json", nil)
+	if err != nil {
+		t.Fatalf("POST /api/clear: %v", err)
+	}
+	_ = clResp.Body.Close()
+	if clResp.StatusCode != http.StatusOK {
+		t.Fatalf("POST /api/clear status = %d", clResp.StatusCode)
 	}
 }
