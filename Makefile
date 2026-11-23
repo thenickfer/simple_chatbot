@@ -74,7 +74,7 @@ dev-server:
 
 build:
 	@echo "Building frontend..."
-	@(cd app/frontend && npm install && npm run build)
+	@(cd app/frontend && (test -d node_modules || npm install) && npm run build)
 	@echo "Building Wails v3 desktop binary ($(WAILS_BUILD_TAGS))..."
 	@mkdir -p app/build/bin
 	@(cd app && go build $(WAILS_BUILD_TAGS) -o build/bin/gpu-assistant .)

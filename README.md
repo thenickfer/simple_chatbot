@@ -88,15 +88,61 @@ make models
 ```
 *Pulls `qwen2.5:3b` (or your configured `OLLAMA_MODEL`) into the Ollama container.*
 
-#### Optional: External Upstream with Automatic Local Fallback
-You can optionally configure an external OpenAI-compatible upstream (e.g. OpenCode Zen or custom endpoint). LiteLLM will attempt the upstream first, and automatically fall back to local Ollama if it is unavailable or rate-limited (HTTP 429):
-```bash
-LITELLM_UPSTREAM_MODEL=openai/big-pickle
-LITELLM_UPSTREAM_API_BASE=https://opencode.ai/zen/v1
-LITELLM_UPSTREAM_API_KEY=public
-OLLAMA_PULL=true
-```
-*Note: Public unauthenticated endpoints can have shared rate limits; LiteLLM's configured fallback ensures local Ollama handles the query if the upstream limit is reached.*
+---
+
+## Adding or Switching Models / Adicionando ou Trocando Modelos
+
+The architecture decouples the desktop app from the LLM provider via LiteLLM. You can switch models or providers **purely by editing `.env`** without changing any code or recompiling the Go binary.
+
+### Option A: Google Gemini Free Tier API (`gemini-2.5-flash`) — Recommended Cloud Option
+
+Google AI Studio provides a free tier for Gemini models with generous rate limits. To use Gemini:
+
+1. Obtain a free API key at [Google AI Studio](https://aistudio.google.com/app/apikey).
+2. In your `.env` file, set:
+   ```env
+   GEMINI_API_KEY=AIzaSy...your_gemini_api_key_here...
+   LITELLM_MODEL=gemini
+   ```
+3. Restart LiteLLM:
+   ```bash
+   make down && make up
+   ```
+> **Automatic Fallback Guarantee**: If Gemini encounters network issues or rate limits, LiteLLM's configured router automatically falls back to your local Ollama instance (`gpu-assistant-local`) so the chat app never fails.
+
+### Option B: Alternative Local Ollama Models (100% Offline & Private)
+
+To change the local model:
+1. In `.env`, change `OLLAMA_MODEL`:
+   ```env
+   OLLAMA_MODEL=llama3.2:3b
+   # or: OLLAMA_MODEL=mistral:7b
+   # or: OLLAMA_MODEL=deepseek-r1:1.5b
+   ```
+2. Pull the new model and restart:
+   ```bash
+   make models
+   make down && make up
+   ```
+
+### Option C: Groq Free Tier (Llama 3.3 70B Versatile)
+1. Get a free API key at [Groq Console](https://console.groq.com/keys).
+2. In `.env`:
+   ```env
+   GROQ_API_KEY=gsk_...
+   LITELLM_MODEL=groq
+   ```
+3. Run `make down && make up`.
+
+### Option D: OpenAI (GPT-4o-mini)
+1. In `.env`:
+   ```env
+   OPENAI_API_KEY=sk-...
+   LITELLM_MODEL=openai
+   ```
+2. Run `make down && make up`.
+
+---
 
 ### 4. Run Smoke Test
 ```bash

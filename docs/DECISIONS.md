@@ -58,6 +58,16 @@ This document records the architectural decisions, trade-offs, and system ration
 
 ---
 
-## 7. Current Limitations & Future Work
+## 7. Pluggable Model Architecture & Google Gemini Free Tier Integration
+- **Decision**: Decouple model provisioning and vendor protocols completely from the Go application via LiteLLM, supporting local Ollama (`qwen2.5:3b`, `llama3.2`, etc.) and Google Gemini Free Tier API (`gemini/gemini-2.5-flash` via `GEMINI_API_KEY`) as first-class, drop-in options with automatic local failover.
+- **Rationale**:
+  - **Zero Go Recompilation**: Evaluators or end users can switch between local CPU/GPU Ollama and high-performance cloud LLMs (Google Gemini 2.5 Flash, Groq, OpenAI) purely by modifying `.env`.
+  - **High Performance on Free Tier**: Google AI Studio provides free access to `gemini-2.5-flash` with substantial rate limits, allowing near-instantaneous agent response and tool-calling execution for users without local GPU acceleration.
+  - **Guaranteed Resiliency via Fallbacks**: LiteLLM's `router_settings.fallbacks` automatically reroutes chat completion requests to `gpu-assistant-local` (local Ollama) if any cloud upstream experiences an HTTP 429 rate limit or network partition.
+  - **Containerized Secret Injection**: `deploy/docker-compose.yml` safely maps provider keys (`GEMINI_API_KEY`, `OPENAI_API_KEY`, `GROQ_API_KEY`) into the proxy container while keeping `.env` excluded from version control.
+
+---
+
+## 8. Current Limitations & Future Work
 - **Static In-Use Counts**: GPU allocation is currently read-only and deterministic; future iterations could add authenticated `reserve_gpu` and `release_gpu` mutations with user session leasing.
 - **Local Model Context Limit**: Compact 3B/4B models operate comfortably within 4k-8k token context windows; conversation compaction or summarization can be introduced if conversation histories extend beyond 50 turns.

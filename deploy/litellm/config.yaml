@@ -2,13 +2,44 @@
 # Docs: https://docs.litellm.ai/docs/proxy/quick_start
 
 model_list:
-  # Primary model alias: if upstream is configured (e.g. OpenCode Zen or custom API),
-  # it is attempted first with fallback to local Ollama.
+  # Primary model alias: if upstream is configured (e.g. Google Gemini, OpenAI, Groq),
+  # it is attempted first with automatic fallback to local Ollama.
   - model_name: gpu-assistant
     litellm_params:
       model: os.environ/LITELLM_UPSTREAM_MODEL
       api_base: os.environ/LITELLM_UPSTREAM_API_BASE
       api_key: os.environ/LITELLM_UPSTREAM_API_KEY
+      timeout: 600
+      stream_timeout: 600
+      stream: false
+
+  # Pre-configured alias for Google Gemini Free Tier (gemini-2.5-flash)
+  # Free API key: https://aistudio.google.com/app/apikey
+  # To use: set LITELLM_MODEL=gemini and GEMINI_API_KEY=AIzaSy... in .env
+  - model_name: gemini
+    litellm_params:
+      model: gemini/gemini-2.5-flash
+      api_key: os.environ/GEMINI_API_KEY
+      timeout: 600
+      stream_timeout: 600
+      stream: false
+
+  # Pre-configured alias for Groq Free Tier (Llama 3.3 70B Versatile)
+  # To use: set LITELLM_MODEL=groq and GROQ_API_KEY=gsk_... in .env
+  - model_name: groq
+    litellm_params:
+      model: groq/llama-3.3-70b-versatile
+      api_key: os.environ/GROQ_API_KEY
+      timeout: 600
+      stream_timeout: 600
+      stream: false
+
+  # Pre-configured alias for OpenAI (gpt-4o-mini)
+  # To use: set LITELLM_MODEL=openai and OPENAI_API_KEY=sk-... in .env
+  - model_name: openai
+    litellm_params:
+      model: gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
       timeout: 600
       stream_timeout: 600
       stream: false
@@ -25,6 +56,9 @@ model_list:
 router_settings:
   fallbacks:
     - gpu-assistant: ["gpu-assistant-local"]
+    - gemini: ["gpu-assistant-local"]
+    - groq: ["gpu-assistant-local"]
+    - openai: ["gpu-assistant-local"]
   routing_strategy: "simple-shuffle"
 
 litellm_settings:
