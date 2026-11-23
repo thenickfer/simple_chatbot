@@ -20,7 +20,7 @@ const (
 	DefaultAPIKey         = "sk-local-gpu-assistant"
 	DefaultModel          = "gpu-assistant"
 	DefaultRequestTimeout = 600 * time.Second
-	HealthCheckTimeout    = 2500 * time.Millisecond
+	HealthCheckTimeout    = 3500 * time.Millisecond
 )
 
 var loadDotEnvOnce sync.Once
@@ -211,7 +211,7 @@ func (c *Client) GenerateContent(ctx context.Context, messages []llms.MessageCon
 	return c.llm.GenerateContent(ctx, messages, options...)
 }
 
-// CheckHealth probes the LiteLLM proxy (/v1/models and /health/liveliness) with a fast timeout (2.5s)
+// CheckHealth probes the LiteLLM proxy (/health/liveliness and /v1/models) with a fast per-request timeout
 // so the Wails UI never blocks or crashes when the proxy is offline.
 func (c *Client) CheckHealth(ctx context.Context) HealthStatus {
 	start := time.Now()
@@ -221,21 +221,19 @@ func (c *Client) CheckHealth(ctx context.Context) HealthStatus {
 		Model:   c.cfg.Model,
 	}
 
-	checkCtx, cancel := context.WithTimeout(ctx, HealthCheckTimeout)
-	defer cancel()
-
 	rootURL := strings.TrimSuffix(c.cfg.BaseURL, "/v1")
-	// Check authenticated /v1/models first so an authentication mismatch is caught early,
-	// falling back to /health/liveliness.
+	// Check /health/liveliness first (fast, lightweight) and then /v1/models.
 	endpoints := []string{
-		c.cfg.BaseURL + "/models",
 		rootURL + "/health/liveliness",
+		c.cfg.BaseURL + "/models",
 	}
 
 	var lastErr error
 	for _, ep := range endpoints {
-		req, err := http.NewRequestWithContext(checkCtx, http.MethodGet, ep, nil)
+		reqCtx, cancel := context.WithTimeout(ctx, HealthCheckTimeout)
+		req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, ep, nil)
 		if err != nil {
+			cancel()
 			lastErr = err
 			continue
 		}
@@ -245,15 +243,16 @@ func (c *Client) CheckHealth(ctx context.Context) HealthStatus {
 
 		resp, err := c.httpClient.Do(req)
 		if err != nil {
+			cancel()
 			lastErr = err
 			continue
 		}
 		_ = resp.Body.Close()
+		cancel()
 
 		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-			status.LatencyMs = time.Since(start).Milliseconds()
-			status.Error = fmt.Sprintf("LiteLLM authentication error (HTTP %d): check LITELLM_MASTER_KEY and restart `make down && make up`", resp.StatusCode)
-			return status
+			lastErr = fmt.Errorf("LiteLLM authentication error (HTTP %d): check LITELLM_MASTER_KEY", resp.StatusCode)
+			continue
 		}
 
 		if resp.StatusCode >= 200 && resp.StatusCode < 400 {
