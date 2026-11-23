@@ -98,12 +98,16 @@ make smoke
 
 ### 5. Launch Application
 ```bash
-# Development mode with hot-reloading:
+# Development mode:
 make dev
+
+# Or standalone HTTP server mode directly:
+make dev-server
 
 # Production build:
 make build
 ```
+*Note: `make dev` automatically detects if the Wails CLI and Linux GTK/WebKit headers are installed. If available, it launches the native desktop window; otherwise, it starts the embedded standalone server at `http://127.0.0.1:34115` with full access to the UI and Go backend.*
 
 ---
 
