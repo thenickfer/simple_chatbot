@@ -3,7 +3,6 @@ services:
     image: ollama/ollama:latest
     container_name: gpu_assistant_ollama
     restart: unless-stopped
-    profiles: ["test"]
     ports:
       - "${OLLAMA_PORT:-11434}:11434"
     volumes:
@@ -50,7 +49,6 @@ services:
     image: ollama/ollama:latest
     container_name: gpu_assistant_ollama_pull
     restart: "no"
-    profiles: ["test"]
     environment:
       - OLLAMA_HOST=http://ollama:11434
     depends_on:
