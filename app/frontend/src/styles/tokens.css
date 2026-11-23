@@ -1,0 +1,166 @@
+/* Cobalt Lab v2 Design System Tokens — Single Source of Truth */
+
+@font-face {
+  font-family: 'Paper Mono';
+  src: url('/fonts/paper-mono/paper-mono-variable.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'IBM Plex Sans';
+  src: url('/fonts/ibm-plex-sans/ibm-plex-sans-latin-variable.woff2') format('woff2');
+  font-weight: 100 700;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: 'IBM Plex Sans';
+  src: url('/fonts/ibm-plex-sans/ibm-plex-sans-latin-ext-variable.woff2') format('woff2');
+  font-weight: 100 700;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+@font-face {
+  font-family: 'IBM Plex Mono';
+  src: url('/fonts/ibm-plex-mono/ibm-plex-mono-latin-400.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'IBM Plex Mono';
+  src: url('/fonts/ibm-plex-mono/ibm-plex-mono-latin-500.woff2') format('woff2');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'IBM Plex Mono';
+  src: url('/fonts/ibm-plex-mono/ibm-plex-mono-latin-600.woff2') format('woff2');
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'DotGothic16';
+  src:
+    url('/fonts/dotgothic16/dotgothic16-000.woff2') format('woff2'),
+    url('/fonts/dotgothic16/dotgothic16-001.woff2') format('woff2'),
+    url('/fonts/dotgothic16/dotgothic16-002.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  /* Core Dark Palette (COBALT_LAB.md) */
+  --ds-color-background: rgb(20 22 26);
+  --ds-color-surface: rgb(27 30 36);
+  --ds-color-surface-sunk: rgb(14 16 19);
+  --ds-color-text-primary: rgb(236 232 221);
+  --ds-color-text-secondary: rgb(147 150 141);
+  --ds-color-cobalt: rgb(45 127 208);
+  --ds-color-accent: rgb(141 185 232);
+  --ds-color-cobalt-deep: rgb(36 68 95);
+  --ds-color-oxide: rgb(233 125 74);
+  --ds-color-thermal-violet: rgb(142 124 195);
+  --ds-color-thermal-hot: rgb(247 217 168);
+  --ds-color-ink: rgb(20 22 26);
+
+  /* High-Contrast Plates & Translucent Structure Tokens (88-92% opacity over CreatureField) */
+  --ds-color-plate: rgb(20 22 26 / 0.88);
+  --ds-color-plate-raised: rgb(27 30 36 / 0.90);
+  --ds-color-plate-sunk: rgb(14 16 19 / 0.92);
+  --ds-color-border: rgb(236 232 221 / 0.14);
+  --ds-color-border-strong: rgb(141 185 232 / 0.36);
+  --ds-color-cobalt-fill: rgb(36 68 95 / 0.58);
+  --ds-color-oxide-fill: rgb(233 125 74 / 0.14);
+  --ds-color-abbr-underline: rgb(236 232 221 / 0.35);
+  --ds-color-transparent: rgb(0 0 0 / 0);
+
+  /* Light Mode Tokens (for print / PDF only per COBALT_LAB.md) */
+  --ds-color-paper: rgb(243 240 230);
+  --ds-color-print-ink: rgb(23 25 26);
+  --ds-color-print-gray: rgb(117 120 111);
+
+  /* Typography */
+  --ds-font-family-primary: 'Founders Grotesk', 'Founders Grotesk Text', 'IBM Plex Sans', sans-serif;
+  --ds-font-family-mono: 'Paper Mono', 'Berkeley Mono', 'IBM Plex Mono', monospace;
+  --ds-font-family-pixel: 'Silkscreen', 'Press Start 2P', 'DotGothic16', monospace;
+
+  /* Pixel Font Sizes (8, 16, 24 px per COBALT_LAB.md) */
+  --ds-font-size-pixel-sm: 8px;
+  --ds-font-size-pixel-md: 16px;
+  --ds-font-size-pixel-lg: 24px;
+
+  /* Fluid & Snapped UI Font Sizes (body and inputs >= 16px on phones) */
+  --ds-font-size-xs: 0.75rem;
+  --ds-font-size-sm: 0.875rem;
+  --ds-font-size-base: 1rem;
+  --ds-font-size-lg: 1.125rem;
+  --ds-font-size-xl: clamp(1rem, 0.95rem + 0.35vw, 1.25rem);
+  --ds-font-size-2xl: clamp(1.125rem, 1rem + 0.6vw, 1.5rem);
+
+  --ds-font-weight-regular: 400;
+  --ds-font-weight-medium: 500;
+  --ds-font-weight-semibold: 600;
+
+  --ds-line-height-tight: 1.25;
+  --ds-line-height-base: 1.5;
+  --ds-line-height-relaxed: 1.625;
+
+  /* 4 px Unit Geometry Grid: Spacing (4, 8, 12, 16, 24, 32, 48, 64, 96) */
+  --ds-spacing-0: 0px;
+  --ds-spacing-1: 4px;
+  --ds-spacing-2: 8px;
+  --ds-spacing-3: 12px;
+  --ds-spacing-4: 16px;
+  --ds-spacing-6: 24px;
+  --ds-spacing-8: 32px;
+  --ds-spacing-12: 48px;
+  --ds-spacing-16: 64px;
+  --ds-spacing-24: 96px;
+
+  /* 4 px Unit Geometry Grid: Radii (4, 8, 12, 16, 24) */
+  --ds-radius-none: 0px;
+  --ds-radius-xs: 4px;
+  --ds-radius-sm: 8px;
+  --ds-radius-md: 12px;
+  --ds-radius-lg: 16px;
+  --ds-radius-xl: 24px;
+
+  /* Interactive & Layout Dimensions */
+  --ds-touch-target-min: 44px;
+  --ds-border-width-default: 1px;
+  --ds-border-width-focus: 2px;
+  --ds-focus-offset: 2px;
+  --ds-layout-max-width: 1200px;
+  --ds-measure-max: 72ch;
+  --ds-star-mark-size: 20px;
+  --ds-status-dot-size: 8px;
+  --ds-loader-cell-size: 8px;
+  --ds-composer-min-height: 44px;
+  --ds-composer-max-height: 160px;
+  --ds-composer-input-basis: 192px;
+  --ds-starter-card-min: 256px;
+
+  /* Motion Tokens (COBALT_LAB.md: fast 90ms, base 160ms, slow 280ms, hero 480ms) */
+  --ds-duration-fast: 90ms;
+  --ds-duration-base: 160ms;
+  --ds-duration-slow: 280ms;
+  --ds-duration-pulse: 360ms;
+  --ds-duration-hero: 480ms;
+  --ds-duration-loader: 640ms;
+  --ds-ease-move: cubic-bezier(0.65, 0, 0.35, 1);
+  --ds-scale-press: 0.97;
+  --ds-scale-pulse: 1.06;
+}
