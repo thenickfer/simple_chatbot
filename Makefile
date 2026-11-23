@@ -5,19 +5,17 @@ ENV_FILE := $(shell test -f .env && echo .env || echo .env.example)
 include $(ENV_FILE)
 export
 
-# Resolve Wails CLI binary: check PATH, then GOPATH/bin
-GOPATH_BIN := $(shell go env GOPATH)/bin
-WAILS_BIN := $(shell command -v wails 2>/dev/null || (test -x $(GOPATH_BIN)/wails && echo $(GOPATH_BIN)/wails))
+# Detect Linux GTK & WebKit toolchains for Wails v3
+HAS_GTK4_WEBKIT6 := $(shell pkg-config --exists gtk4 webkitgtk-6.0 2>/dev/null && echo "yes" || echo "no")
+HAS_GTK3_WEBKIT4 := $(shell pkg-config --exists gtk+-3.0 webkit2gtk-4.1 2>/dev/null && echo "yes" || echo "no")
 
-# Detect installed webkit2gtk package on Linux (supports both 4.1 and legacy 4.0)
-HAS_WEBKIT_41 := $(shell pkg-config --exists webkit2gtk-4.1 2>/dev/null && echo "yes" || echo "no")
-HAS_WEBKIT_40 := $(shell pkg-config --exists webkit2gtk-4.0 2>/dev/null && echo "yes" || echo "no")
-HAS_GTK3 := $(shell pkg-config --exists gtk+-3.0 2>/dev/null && echo "yes" || echo "no")
-
-ifeq ($(HAS_WEBKIT_41),yes)
-  WAILS_TAGS := -tags webkit2_41
+# Wails v3 uses GTK4 + WebKitGTK 6.0 by default. On older distros, -tags gtk3 enables GTK3 + WebKit2GTK 4.1
+ifeq ($(HAS_GTK4_WEBKIT6),yes)
+  WAILS_BUILD_TAGS :=
+else ifeq ($(HAS_GTK3_WEBKIT4),yes)
+  WAILS_BUILD_TAGS := -tags gtk3
 else
-  WAILS_TAGS :=
+  WAILS_BUILD_TAGS := -tags purego
 endif
 
 .PHONY: help up up-gpu down models dev dev-server build test smoke clean
@@ -28,7 +26,7 @@ help:
 	@echo "  make up-gpu      - Start Ollama with NVIDIA GPU acceleration profile"
 	@echo "  make down        - Stop and remove Docker Compose containers"
 	@echo "  make models      - Pull the configured Ollama model ($(OLLAMA_MODEL))"
-	@echo "  make dev         - Run application in development mode (Wails desktop or standalone browser server)"
+	@echo "  make dev         - Run application in development mode (Wails v3 native desktop or standalone server)"
 	@echo "  make dev-server  - Run standalone HTTP + embedded React UI server directly on :34115"
 	@echo "  make build       - Build production binary and frontend"
 	@echo "  make test        - Run Go backend and frontend unit tests"
@@ -49,47 +47,44 @@ models:
 	docker compose -f $(COMPOSE_FILE) exec ollama ollama pull $(OLLAMA_MODEL)
 
 dev:
-	@if [ -n "$(WAILS_BIN)" ] && [ "$(HAS_GTK3)" = "yes" ] && ([ "$(HAS_WEBKIT_41)" = "yes" ] || [ "$(HAS_WEBKIT_40)" = "yes" ]); then \
-		echo "Starting Wails native desktop app in dev mode ($(WAILS_BIN))..."; \
-		(cd app && $(WAILS_BIN) dev $(WAILS_TAGS)); \
+	@echo "Ensuring frontend is built..."
+	@(cd app/frontend && (test -d dist || npm run build))
+	@if [ -n "$$DISPLAY" ] || [ -n "$$WAYLAND_DISPLAY" ]; then \
+		if [ "$(HAS_GTK4_WEBKIT6)" = "yes" ]; then \
+			echo "Starting Wails v3 native desktop application (GTK4 + WebKitGTK 6.0)..."; \
+			(cd app && go run .); \
+		elif [ "$(HAS_GTK3_WEBKIT4)" = "yes" ]; then \
+			echo "Starting Wails v3 native desktop application (GTK3 fallback)..."; \
+			(cd app && go run -tags gtk3 .); \
+		else \
+			echo "No GTK4 or GTK3 WebKit headers found. Falling back to standalone browser server..."; \
+			echo "URL: http://127.0.0.1:34115"; \
+			(cd app && HTTP_ADDR="127.0.0.1:34115" go run .); \
+		fi \
 	else \
-		echo "================================================================================"; \
-		if [ -z "$(WAILS_BIN)" ]; then \
-			echo "Notice: Wails CLI ('wails') was not found in PATH or $(GOPATH_BIN)."; \
-		fi; \
-		if [ "$(HAS_WEBKIT_41)" != "yes" ] && [ "$(HAS_WEBKIT_40)" != "yes" ]; then \
-			echo "Notice: Linux WebKit2GTK headers ('webkit2gtk-4.1' / 'webkit2gtk-4.0') not installed."; \
-		fi; \
-		echo "Starting GPU Assistant in standalone HTTP server mode (browser UI + Go backend)..."; \
+		echo "No GUI display detected ($$DISPLAY/$$WAYLAND_DISPLAY unset). Starting standalone HTTP server..."; \
 		echo "URL: http://127.0.0.1:34115"; \
-		echo "================================================================================"; \
-		(cd app/frontend && (test -d dist || npm run build)) && \
 		(cd app && HTTP_ADDR="127.0.0.1:34115" go run .); \
 	fi
 
 dev-server:
 	@echo "Building frontend dist and starting standalone HTTP server on http://127.0.0.1:34115..."
-	(cd app/frontend && (test -d dist || npm run build))
-	(cd app && HTTP_ADDR="127.0.0.1:34115" go run .)
+	@(cd app/frontend && (test -d dist || npm run build))
+	@(cd app && HTTP_ADDR="127.0.0.1:34115" go run .)
 
 build:
 	@echo "Building frontend..."
-	(cd app/frontend && npm install && npm run build)
-	@if [ -n "$(WAILS_BIN)" ] && [ "$(HAS_GTK3)" = "yes" ] && ([ "$(HAS_WEBKIT_41)" = "yes" ] || [ "$(HAS_WEBKIT_40)" = "yes" ]); then \
-		echo "Building Wails desktop application ($(WAILS_BIN))..."; \
-		(cd app && $(WAILS_BIN) build -clean -s $(WAILS_TAGS)); \
-	else \
-		echo "Building standalone desktop server binary (embedded frontend)..."; \
-		mkdir -p app/build/bin; \
-		(cd app && go build -o build/bin/gpu-assistant .); \
-		echo "Binary built successfully at app/build/bin/gpu-assistant"; \
-	fi
+	@(cd app/frontend && npm install && npm run build)
+	@echo "Building Wails v3 desktop binary ($(WAILS_BUILD_TAGS))..."
+	@mkdir -p app/build/bin
+	@(cd app && go build $(WAILS_BUILD_TAGS) -o build/bin/gpu-assistant .)
+	@echo "Binary built successfully at app/build/bin/gpu-assistant"
 
 test:
 	@echo "Running frontend unit tests and production bundle check..."
-	(cd app/frontend && npm test && npm run build)
+	@(cd app/frontend && npm test && npm run build)
 	@echo "Running backend unit and end-to-end tests..."
-	(cd app && go test -v -race ./...)
+	@(cd app && go test -v -race ./...)
 
 smoke:
 	@echo "Checking LiteLLM health endpoint..."

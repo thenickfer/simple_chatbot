@@ -52,10 +52,7 @@ jobs:
       - name: Install Linux build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libwebkit2gtk-4.0-dev
-
-      - name: Install Wails CLI
-        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev
 
       - name: Determine tag name
         id: vars
@@ -78,10 +75,11 @@ jobs:
           cd app
           go test -v ./...
 
-      - name: Build Wails Desktop Application
+      - name: Build Wails v3 Desktop Application
         run: |
+          mkdir -p app/build/bin
           cd app
-          wails build -clean -s
+          go build -tags gtk3 -o build/bin/gpu-assistant .
 
       - name: Package release artifact
         run: |

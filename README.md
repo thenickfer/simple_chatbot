@@ -1,7 +1,7 @@
 # GPU Lab Assistant
 
 > Desktop assistant for querying, inspecting, and filtering research lab GPU infrastructure in real time.  
-> Built with **Wails v2 (Go)**, **React + TypeScript**, **LangChainGo**, **LiteLLM**, **Ollama**, and the **Cobalt Lab v2** design system with a 60fps ASCII creature field background.
+> Built with **Wails v3 (Go + GTK4 / WebKitGTK 6.0)**, **React + TypeScript**, **LangChainGo**, **LiteLLM**, **Ollama**, and the **Cobalt Lab v2** design system with a 60fps ASCII creature field background.
 
 ---
 
@@ -13,7 +13,7 @@
 │                                                                        │
 │   ┌────────────────────────────────┐   ┌───────────────────────────┐   │
 │   │   Frontend (React + Vite)      │   │     Backend (Go)          │   │
-│   │   • Cobalt Lab v2 Dark Design  │IPC│   • Wails App Bindings    │   │
+│   │   • Cobalt Lab v2 Dark Design  │IPC│   • Wails v3 Native GTK4  │   │
 │   │   • 60fps CreatureField Canvas │───│   • LangChainGo Agent     │   │
 │   │   • High-Contrast UI Plates    │   │   • 4 Typed SQLite Tools  │   │
 │   │   • Markdown + Abbr Semantics  │   │   • modernc.org/sqlite DB │   │
@@ -36,7 +36,7 @@
 
 The architecture is deliberately modular and explainable in 5 minutes:
 1. **Frontend**: React single page over a procedural 60fps ASCII `CreatureField` canvas that steers around high-contrast UI plates.
-2. **Backend**: Pure-Go agent using `langchaingo` with 4 typed, read-only tools querying an embedded SQLite database (`modernc.org/sqlite`).
+2. **Backend**: Pure-Go agent using `langchaingo` with 4 typed, read-only tools querying an embedded SQLite database (`modernc.org/sqlite`). Runs natively on desktop via Wails v3 (GTK4 + WebKitGTK 6.0) or standalone HTTP mode.
 3. **LLM Proxy**: Dockerized LiteLLM proxy exposing a standard OpenAI-compatible API to the Go app, routing queries to a local Ollama instance (`qwen2.5:3b` by default).
 
 ---
@@ -60,11 +60,9 @@ The local SQLite database initializes idempotently with 5 enterprise NVIDIA GPUs
 - **Docker & Docker Compose** (for Ollama and LiteLLM)
 - **Go 1.21+**
 - **Node.js 18+ & npm**
-- **Wails CLI v2**: `go install github.com/wailsapp/wails/v2/cmd/wails@latest`
-- Linux desktop build dependencies (if running/compiling on Linux):
-  ```bash
-  sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libwebkit2gtk-4.0-dev
-  ```
+- Linux desktop build dependencies:
+  - Arch Linux: `sudo pacman -S gtk4 webkitgtk-6.0` (or `gtk3 webkit2gtk-4.1` on older distros)
+  - Ubuntu / Debian: `sudo apt-get install -y libgtk-4-dev libwebkitgtk-6.0-dev` (or `libgtk-3-dev libwebkit2gtk-4.1-dev`)
 
 ---
 
@@ -98,16 +96,15 @@ make smoke
 
 ### 5. Launch Application
 ```bash
-# Development mode:
+# Run application in development mode (launches native Wails v3 window when display is present, or standalone server):
 make dev
 
-# Or standalone HTTP server mode directly:
+# Or launch standalone browser server directly:
 make dev-server
 
 # Production build:
 make build
 ```
-*Note: `make dev` automatically detects if the Wails CLI and Linux GTK/WebKit headers are installed. If available, it launches the native desktop window; otherwise, it starts the embedded standalone server at `http://127.0.0.1:34115` with full access to the UI and Go backend.*
 
 ---
 
@@ -149,7 +146,7 @@ make test
 
 Semantic versioning, changelog generation, and desktop binary compilation are automated via GitHub Actions (`.github/workflows/release.yml`):
 - Pushes to `main` with Conventional Commits trigger **Release Please** (`.release-please-config.json`, `.release-please-manifest.json`).
-- Merging a release PR automatically builds the Wails application, packages `gpu-assistant-${tag}-linux-amd64.tar.gz` and SHA-256 checksums, and attaches them to GitHub Release assets.
+- Merging a release PR automatically builds the Wails v3 application binary, packages `gpu-assistant-${tag}-linux-amd64.tar.gz` and SHA-256 checksums, and attaches them to GitHub Release assets.
 
 ---
 

@@ -13,7 +13,16 @@ This document records the architectural decisions, trade-offs, and system ration
 
 ---
 
-## 2. Typed Read-Only Tools vs. Raw Text-to-SQL
+## 2. Desktop Framework: Wails v3 (`github.com/wailsapp/wails/v3`)
+- **Decision**: Upgrade from Wails v2 to Wails v3 (`v3.1.0`).
+- **Rationale**:
+  - **Modern Linux GUI Toolchain (GTK4 + WebKitGTK 6.0)**: Wails v2 depends on legacy `gtk+-3.0` and `webkit2gtk-4.0`/`webkit2gtk-4.1` packages which are deprecated or absent on modern rolling Linux distributions (such as Arch Linux). Wails v3 targets modern GTK4 and WebKitGTK 6.0 by default while maintaining backward compatibility with GTK3 runners via `-tags gtk3`.
+  - **Zero External CLI Requirement**: Wails v3 applications build and run directly via standard Go commands (`go build .` and `go run .`) without requiring a separate global Wails CLI binary.
+  - **Embedded Assets & IPC**: Supports native service bindings (`application.NewService`), asset file servers (`application.AssetFileServerFS`), and clean OS lifecycle hooks.
+
+---
+
+## 3. Typed Read-Only Tools vs. Raw Text-to-SQL
 - **Decision**: Implement 4 typed, read-only `langchaingo` tools (`list_gpus`, `get_gpu`, `check_availability`, `find_gpus`) that query structured SQLite repositories through safe parameterized methods, instead of allowing raw Text-to-SQL generation.
 - **Rationale**:
   - **Zero SQL Injection / Mutation**: The LLM cannot execute `DROP`, `UPDATE`, `INSERT`, or unconstrained table queries.
@@ -22,15 +31,15 @@ This document records the architectural decisions, trade-offs, and system ration
 
 ---
 
-## 3. Pure-Go SQLite Driver (`modernc.org/sqlite`)
+## 4. Pure-Go SQLite Driver (`modernc.org/sqlite`)
 - **Decision**: Use `modernc.org/sqlite` instead of `mattn/go-sqlite3`.
 - **Rationale**:
   - Pure Go implementation that requires no CGO (`CGO_ENABLED=0` compatible for the database layer).
-  - Eliminates native C toolchain / cross-compilation headaches across Linux environments while maintaining full SQLite transactional semantics and compatibility with Wails Linux desktop builds.
+  - Eliminates native C toolchain / cross-compilation headaches across environments while maintaining full SQLite transactional semantics and compatibility with Wails Linux desktop builds.
 
 ---
 
-## 4. Deterministic Simulated Lab GPU Inventory
+## 5. Deterministic Simulated Lab GPU Inventory
 - **Decision**: Seed an idempotent catalog of 5 enterprise NVIDIA GPUs with fixed, deterministic `in_use` counts:
   | ID | Name | Architecture | VRAM (GB) | MIG Support | Quantity | In Use | Available | Rationale |
   | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -43,12 +52,12 @@ This document records the architectural decisions, trade-offs, and system ration
 
 ---
 
-## 5. Dual Runtime Wails + Browser Dev Bridge
-- **Decision**: Provide standard native Wails IPC bindings (`window.go.main.App`) while also enabling a fallback REST bridge when running in a standalone browser.
-- **Rationale**: Allows rapid frontend development via Vite hot-reloading (`localhost:5173`) and automated headless browser responsive testing without needing a display server or X11/Wayland desktop session.
+## 6. Dual Runtime Wails + Browser Dev Bridge
+- **Decision**: Provide standard native Wails desktop application support while also enabling an HTTP server mode (`--http-addr` / `HTTP_ADDR`) with embedded static frontend and REST endpoints.
+- **Rationale**: Allows rapid frontend development, browser debugging, and automated headless integration testing (including automated responsive tests) without needing an active display server or X11/Wayland session.
 
 ---
 
-## 6. Current Limitations & Future Work
+## 7. Current Limitations & Future Work
 - **Static In-Use Counts**: GPU allocation is currently read-only and deterministic; future iterations could add authenticated `reserve_gpu` and `release_gpu` mutations with user session leasing.
 - **Local Model Context Limit**: Compact 3B/4B models operate comfortably within 4k-8k token context windows; conversation compaction or summarization can be introduced if conversation histories extend beyond 50 turns.
