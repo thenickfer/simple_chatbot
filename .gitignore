@@ -29,6 +29,12 @@ go.work.sum
 # env file
 .env
 
+# Wails & local SQLite artifacts
+app/build/bin/
+*.db
+*.db-shm
+*.db-wal
+
 # Editor/IDE
 # .idea/
 # .vscode/

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"embed"
 	"flag"
 	"io/fs"
 	"log"
@@ -16,6 +17,9 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 )
+
+//go:embed all:frontend/dist
+var embeddedFrontend embed.FS
 
 func main() {
 	httpAddrFlag := flag.String("http-addr", "", "Run in standalone HTTP API + static server mode on this address (e.g. :8080 or 127.0.0.1:8080)")
@@ -82,6 +86,11 @@ func main() {
 }
 
 func resolveFrontendFS() fs.FS {
+	if sub, err := fs.Sub(embeddedFrontend, "frontend/dist"); err == nil {
+		if _, statErr := fs.Stat(sub, "index.html"); statErr == nil {
+			return sub
+		}
+	}
 	candidates := []string{
 		filepath.Join("frontend", "dist"),
 		filepath.Join("app", "frontend", "dist"),

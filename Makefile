@@ -41,9 +41,9 @@ build:
 	cd app && wails build -clean -s
 
 test:
-	@echo "Running frontend unit tests..."
-	cd app/frontend && npm test
-	@echo "Running backend unit tests..."
+	@echo "Running frontend unit tests and production bundle check..."
+	cd app/frontend && npm test && npm run build
+	@echo "Running backend unit and end-to-end tests..."
 	cd app && go test -v -race ./...
 
 smoke:
