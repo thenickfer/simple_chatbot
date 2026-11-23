@@ -2,25 +2,35 @@
 # Docs: https://docs.litellm.ai/docs/proxy/quick_start
 
 model_list:
-  # Primary model alias for the GPU Assistant desktop app.
-  # Upstream is env-driven (see .env.example): local Ollama by default,
-  # or OpenCode Zen free API (openai/big-pickle, api_key "public").
+  # Primary model alias: if upstream is configured (e.g. OpenCode Zen or custom API),
+  # it is attempted first with fallback to local Ollama.
   - model_name: gpu-assistant
     litellm_params:
       model: os.environ/LITELLM_UPSTREAM_MODEL
       api_base: os.environ/LITELLM_UPSTREAM_API_BASE
       api_key: os.environ/LITELLM_UPSTREAM_API_KEY
+      timeout: 600
+      stream_timeout: 600
       stream: false
 
-  # Optional fallback / alternate hosted models (uncomment and supply API key in .env if desired):
-  # - model_name: gpu-assistant-cloud
-  #   litellm_params:
-  #     model: openai/gpt-4o-mini
-  #     api_key: os.environ/OPENAI_API_KEY
+  # Guaranteed local Ollama backup model
+  - model_name: gpu-assistant-local
+    litellm_params:
+      model: os.environ/LITELLM_LOCAL_OLLAMA_MODEL
+      api_base: os.environ/OLLAMA_API_BASE
+      timeout: 600
+      stream_timeout: 600
+      stream: false
+
+router_settings:
+  fallbacks:
+    - gpu-assistant: ["gpu-assistant-local"]
+  routing_strategy: "simple-shuffle"
 
 litellm_settings:
   drop_params: true
   set_verbose: false
+  request_timeout: 600
 
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY

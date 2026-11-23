@@ -7,6 +7,9 @@ services:
       - "${OLLAMA_PORT:-11434}:11434"
     volumes:
       - ollama_data:/root/.ollama
+    environment:
+      - OLLAMA_KEEP_ALIVE=24h
+      - OLLAMA_LOAD_TIMEOUT=15m
     healthcheck:
       test: ["CMD-SHELL", "ollama list > /dev/null 2>&1 || exit 1"]
       interval: 5s
@@ -24,6 +27,9 @@ services:
       - "${OLLAMA_PORT:-11434}:11434"
     volumes:
       - ollama_data:/root/.ollama
+    environment:
+      - OLLAMA_KEEP_ALIVE=24h
+      - OLLAMA_LOAD_TIMEOUT=15m
     deploy:
       resources:
         reservations:
@@ -64,6 +70,8 @@ services:
       - LITELLM_UPSTREAM_MODEL=${LITELLM_UPSTREAM_MODEL:-ollama_chat/${OLLAMA_MODEL:-qwen2.5:3b}}
       - LITELLM_UPSTREAM_API_BASE=${LITELLM_UPSTREAM_API_BASE:-http://ollama:11434}
       - LITELLM_UPSTREAM_API_KEY=${LITELLM_UPSTREAM_API_KEY:-none}
+      - LITELLM_LOCAL_OLLAMA_MODEL=ollama_chat/${OLLAMA_MODEL:-qwen2.5:3b}
+      - OLLAMA_API_BASE=http://ollama:11434
       - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen2.5:3b}
     depends_on:
       ollama:
