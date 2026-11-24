@@ -411,7 +411,14 @@ func TestCompiledBinaryStandaloneHTTPMode(t *testing.T) {
 	dbPath := filepath.Join(tmpDir, "binary_test.db")
 	binPath := filepath.Join(tmpDir, "gpu-assistant-bin")
 
-	buildCmd := exec.Command("go", "build", "-o", binPath, ".")
+	buildArgs := []string{"build"}
+	if err := exec.Command("pkg-config", "--exists", "gtk4", "webkitgtk-6.0").Run(); err != nil {
+		if err3 := exec.Command("pkg-config", "--exists", "gtk+-3.0", "webkit2gtk-4.1").Run(); err3 == nil {
+			buildArgs = append(buildArgs, "-tags", "gtk3")
+		}
+	}
+	buildArgs = append(buildArgs, "-o", binPath, ".")
+	buildCmd := exec.Command("go", buildArgs...)
 	if out, err := buildCmd.CombinedOutput(); err != nil {
 		t.Fatalf("go build binary failed: %v\n%s", err, string(out))
 	}

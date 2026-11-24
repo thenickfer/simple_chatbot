@@ -73,7 +73,7 @@ jobs:
       - name: Run backend tests
         run: |
           cd app
-          go test -v ./...
+          go test -v -tags gtk3 ./...
 
       - name: Build Wails v3 Desktop Application
         run: |
