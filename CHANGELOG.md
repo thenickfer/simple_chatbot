@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.1](https://github.com/thenickfer/simple_chatbot/compare/v1.1.0...v1.1.1) (2026-11-24)
+
+
+### Bug Fixes
+
+* **build:** switch to gtk4 ([d64874d](https://github.com/thenickfer/simple_chatbot/commit/d64874da5fc2e2934cc460be4ba25358e32ac8f0))
+
 ## [1.1.0](https://github.com/thenickfer/simple_chatbot/compare/v1.0.0...v1.1.0) (2026-11-24)
 
 
