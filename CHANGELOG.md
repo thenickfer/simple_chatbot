@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.1.0](https://github.com/thenickfer/simple_chatbot/compare/v1.0.0...v1.1.0) (2026-11-24)
+
+
+### Features
+
+* **logs:** tool/thought logging ([6c1aee2](https://github.com/thenickfer/simple_chatbot/commit/6c1aee29981bae860be898cfe289700cf4146498))
+* security and documentation ([31275c8](https://github.com/thenickfer/simple_chatbot/commit/31275c82c5b25994b378952318660cb4e7a83956))
+* **store:** borrow/return gpus ([3a329a7](https://github.com/thenickfer/simple_chatbot/commit/3a329a761f6a44a6a173efd57dbd3246557e6541))
+* **store:** requires password to borrow/return gpu ([31275c8](https://github.com/thenickfer/simple_chatbot/commit/31275c82c5b25994b378952318660cb4e7a83956))
+
+
+### Bug Fixes
+
+* **ci:** runner nodejs and golang version update ([02021d2](https://github.com/thenickfer/simple_chatbot/commit/02021d271e6ae7c5aad42eeeb3c5dd4c8dedd801))
+* **docker-compose:** include ollama service ([4894e48](https://github.com/thenickfer/simple_chatbot/commit/4894e48ea7f4b3833d46644fda8139a957c56b7f))
+
 ## 1.0.0 (2026-11-23)
 
 
