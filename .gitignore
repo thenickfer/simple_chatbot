@@ -35,6 +35,10 @@ app/build/bin/
 *.db-shm
 *.db-wal
 
+# Agent trace logs
+logs/
+*.log
+
 # Editor/IDE
 # .idea/
 # .vscode/

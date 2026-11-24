@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/tmc/langchaingo/llms"
 	"github.com/tmc/langchaingo/tools"
@@ -35,6 +36,12 @@ type Agent struct {
 	toolList []tools.Tool
 	toolMap  map[string]tools.Tool
 	llmTools []llms.Tool
+	logger   *TraceLogger
+}
+
+// SetTraceLogger attaches a TraceLogger for debugging/demo logging of messages, thoughts, and tool calls.
+func (a *Agent) SetTraceLogger(logger *TraceLogger) {
+	a.logger = logger
 }
 
 // New creates an Agent backed by the given SQLite store and LLMClient.
@@ -92,25 +99,37 @@ func (a *Agent) Chat(ctx context.Context, userText string) (Response, error) {
 	// Append current user turn.
 	convo = append(convo, llms.TextParts(llms.ChatMessageTypeHuman, trimmed))
 
+	turn := a.logger.NextTurn()
+	turnStart := time.Now()
+	a.logger.LogUserMessage(turn, trimmed)
+
 	var invokedTools []string
 	var finalReply string
 
 	for iter := 0; iter < MaxToolIterations; iter++ {
+		a.logger.LogLLMRequest(turn, iter+1, MaxToolIterations, len(convo), len(a.llmTools), "chat")
+		llmStart := time.Now()
 		resp, err := a.llm.GenerateContent(
 			ctx,
 			convo,
 			llms.WithTools(a.llmTools),
 			llms.WithTemperature(0.0),
 		)
+		llmDur := time.Since(llmStart)
 		if err != nil {
+			a.logger.LogError(turn, "llm_request", err)
 			return Response{}, fmt.Errorf("LiteLLM request failed: %w", err)
 		}
 		if resp == nil || len(resp.Choices) == 0 {
-			return Response{}, errors.New("empty response from LiteLLM model")
+			emptyErr := errors.New("empty response from LiteLLM model")
+			a.logger.LogError(turn, "llm_response", emptyErr)
+			return Response{}, emptyErr
 		}
 
 		choice := resp.Choices[0]
 		toolCalls := extractToolCalls(choice, a.toolMap)
+		a.logger.LogLLMResponse(turn, iter+1, MaxToolIterations, llmDur, choice.StopReason, len(toolCalls))
+		a.logChoiceThoughts(turn, choice, len(toolCalls) > 0)
 
 		if len(toolCalls) == 0 {
 			finalReply = strings.TrimSpace(choice.Content)
@@ -142,19 +161,25 @@ func (a *Agent) Chat(ctx context.Context, userText string) (Response, error) {
 				callID = fmt.Sprintf("call_%d_%d", iter, idx)
 			}
 
+			a.logger.LogToolCall(turn, callID, toolName, toolArgs)
+			toolStart := time.Now()
 			toolImpl, ok := a.toolMap[toolName]
 			var toolOutput string
+			var toolErr error
 			if !ok {
+				toolErr = fmt.Errorf("unknown tool %q", toolName)
 				toolOutput = fmt.Sprintf(`{"error": "unknown tool %q"}`, toolName)
 			} else {
 				invokedTools = append(invokedTools, toolName)
 				out, callErr := toolImpl.Call(ctx, toolArgs)
 				if callErr != nil {
+					toolErr = callErr
 					toolOutput = fmt.Sprintf(`{"error": %q}`, callErr.Error())
 				} else {
 					toolOutput = out
 				}
 			}
+			a.logger.LogToolResult(turn, callID, toolName, time.Since(toolStart), toolOutput, toolErr)
 
 			convo = append(convo, llms.MessageContent{
 				Role: llms.ChatMessageTypeTool,
@@ -171,37 +196,84 @@ func (a *Agent) Chat(ctx context.Context, userText string) (Response, error) {
 
 	// If the model hit MaxToolIterations while still calling tools, ask for a final synthesis without tools.
 	if finalReply == "" {
+		a.logger.LogLLMRequest(turn, MaxToolIterations+1, MaxToolIterations, len(convo), 0, "synthesis")
+		synthStart := time.Now()
 		resp, err := a.llm.GenerateContent(
 			ctx,
 			convo,
 			llms.WithTemperature(0.0),
 		)
+		synthDur := time.Since(synthStart)
 		if err != nil {
+			a.logger.LogError(turn, "llm_synthesis", err)
 			return Response{}, fmt.Errorf("LiteLLM synthesis failed: %w", err)
 		}
 		if resp != nil && len(resp.Choices) > 0 {
-			finalReply = strings.TrimSpace(resp.Choices[0].Content)
+			choice := resp.Choices[0]
+			a.logger.LogLLMResponse(turn, MaxToolIterations+1, MaxToolIterations, synthDur, choice.StopReason, 0)
+			a.logChoiceThoughts(turn, choice, false)
+			finalReply = strings.TrimSpace(choice.Content)
 		}
 	}
 
 	if finalReply == "" {
-		return Response{}, errors.New("model returned an empty response")
+		emptyErr := errors.New("model returned an empty response")
+		a.logger.LogError(turn, "final_reply", emptyErr)
+		return Response{}, emptyErr
 	}
 
 	// Persist both the user message and the assistant response in SQLite.
 	if err := a.store.AddUserMessage(ctx, trimmed); err != nil {
+		a.logger.LogError(turn, "save_user_message", err)
 		return Response{}, fmt.Errorf("save user message: %w", err)
 	}
 	savedMsg, err := a.store.AddAIMessageWithTools(ctx, finalReply, invokedTools)
 	if err != nil {
+		a.logger.LogError(turn, "save_assistant_message", err)
 		return Response{}, fmt.Errorf("save assistant message: %w", err)
 	}
+
+	a.logger.LogAssistantMessage(turn, time.Since(turnStart), invokedTools, finalReply)
 
 	return Response{
 		Reply:     finalReply,
 		ToolCalls: invokedTools,
 		Message:   savedMsg,
 	}, nil
+}
+
+func (a *Agent) logChoiceThoughts(turn uint64, choice *llms.ContentChoice, hasToolCalls bool) {
+	if a.logger == nil || choice == nil {
+		return
+	}
+	reasoning := strings.TrimSpace(choice.ReasoningContent)
+	if reasoning != "" {
+		a.logger.LogThought(turn, "reasoning_content", reasoning)
+	}
+	if choice.GenerationInfo != nil {
+		for _, key := range []string{"reasoning_content", "reasoning"} {
+			if raw, ok := choice.GenerationInfo[key]; ok {
+				if s, ok := raw.(string); ok {
+					trimmed := strings.TrimSpace(s)
+					if trimmed != "" && trimmed != reasoning {
+						a.logger.LogThought(turn, "generation_info."+key, trimmed)
+					}
+				}
+			}
+		}
+	}
+	thinkBlocks := extractThinkTags(choice.Content)
+	for _, block := range thinkBlocks {
+		if block != reasoning {
+			a.logger.LogThought(turn, "think_tag", block)
+		}
+	}
+	if hasToolCalls && len(thinkBlocks) == 0 {
+		trimmedContent := strings.TrimSpace(choice.Content)
+		if trimmedContent != "" && !looksLikeRawJSONToolCall(trimmedContent) {
+			a.logger.LogThought(turn, "assistant_pre_tool", trimmedContent)
+		}
+	}
 }
 
 // extractToolCalls inspects structured ToolCalls, legacy FuncCall, and fallback JSON tool calls

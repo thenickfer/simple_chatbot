@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -43,11 +44,12 @@ type StatusDTO struct {
 
 // App is the Wails-bound application struct and HTTP JSON API handler.
 type App struct {
-	ctx       context.Context
-	mu        sync.Mutex
-	store     *store.Store
-	llmClient *llm.Client
-	agent     *agent.Agent
+	ctx         context.Context
+	mu          sync.Mutex
+	store       *store.Store
+	llmClient   *llm.Client
+	agent       *agent.Agent
+	traceLogger *agent.TraceLogger
 }
 
 // NewApp creates and initializes a new App instance with SQLite store, LiteLLM client, and Agent.
@@ -66,11 +68,20 @@ func NewApp() (*App, error) {
 	}
 
 	ag := agent.New(st, llmClient)
+	traceLogger, logErr := agent.NewTraceLoggerFromEnv(llmClient.Model(), llmClient.Config().BaseURL)
+	if logErr != nil {
+		log.Printf("Warning: failed to initialize agent trace log: %v", logErr)
+	} else if traceLogger != nil {
+		ag.SetTraceLogger(traceLogger)
+		log.Printf("Agent trace log: %s", traceLogger.Path())
+	}
+
 	return &App{
-		ctx:       ctx,
-		store:     st,
-		llmClient: llmClient,
-		agent:     ag,
+		ctx:         ctx,
+		store:       st,
+		llmClient:   llmClient,
+		agent:       ag,
+		traceLogger: traceLogger,
 	}, nil
 }
 
@@ -91,6 +102,10 @@ func (a *App) startup(ctx context.Context) {
 
 // shutdown is called when the Wails application exits.
 func (a *App) shutdown(_ context.Context) {
+	if a.traceLogger != nil {
+		a.traceLogger.LogEvent("session_shutdown", "")
+		_ = a.traceLogger.Close()
+	}
 	if a.store != nil {
 		_ = a.store.Close()
 	}
@@ -156,7 +171,11 @@ func (a *App) ClearConversation() error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	return a.store.Clear(a.baseContext())
+	if err := a.store.Clear(a.baseContext()); err != nil {
+		return err
+	}
+	a.traceLogger.LogEvent("conversation_cleared", "")
+	return nil
 }
 
 // GetStatus checks LiteLLM reachability, active model alias, and seeded GPU count.
