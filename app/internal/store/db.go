@@ -96,6 +96,12 @@ CREATE TABLE IF NOT EXISTS gpus (
 	in_use INTEGER NOT NULL,
 	notes TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS gpu_loans (
+	gpu_id TEXT PRIMARY KEY REFERENCES gpus(id) ON DELETE CASCADE,
+	borrowed_by_user INTEGER NOT NULL DEFAULT 0 CHECK (borrowed_by_user >= 0),
+	updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 `
 	_, err := s.db.ExecContext(ctx, schemaSQL)
 	return err

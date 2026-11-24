@@ -212,3 +212,87 @@ func TestChatMessageHistoryPersistenceAcrossReopenAndClear(t *testing.T) {
 		t.Fatalf("expected 0 messages after Clear, got %d", len(msgs))
 	}
 }
+
+func TestBorrowAndReturnGPURailguardsAndPersistence(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "loans.db")
+
+	st, err := Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("Open store failed: %v", err)
+	}
+
+	// 1. Borrowing when no stock is available (RTX 4090: 3/3 in use, 0 available) must be forbidden.
+	if _, err := st.BorrowGPU(ctx, "RTX 4090", 1); !errors.Is(err, ErrNoStock) {
+		t.Fatalf("expected ErrNoStock for RTX 4090, got %v", err)
+	}
+
+	// 2. Borrowing more than available (A100: 2 available) must be forbidden.
+	if _, err := st.BorrowGPU(ctx, "A100", 3); !errors.Is(err, ErrInsufficientStock) {
+		t.Fatalf("expected ErrInsufficientStock for 3 A100s, got %v", err)
+	}
+
+	// 3. Returning when already at full original stock (H100: 2/2 available, 0 in use) must be forbidden.
+	if _, err := st.ReturnGPU(ctx, "H100", 1); !errors.Is(err, ErrStockLimitExceeded) {
+		t.Fatalf("expected ErrStockLimitExceeded for H100, got %v", err)
+	}
+
+	// 4. Returning a GPU that has units in_use (A100: 2/4 in use) but was NOT borrowed by the user must be forbidden.
+	if _, err := st.ReturnGPU(ctx, "A100", 1); !errors.Is(err, ErrNotBorrowedByUser) {
+		t.Fatalf("expected ErrNotBorrowedByUser for A100, got %v", err)
+	}
+
+	// 5. Borrowing multiple GPUs succeeds (2 A100s + 1 L40S).
+	gA100, err := st.BorrowGPU(ctx, "A100", 2)
+	if err != nil {
+		t.Fatalf("BorrowGPU(A100, 2) failed: %v", err)
+	}
+	if gA100.Available != 0 || gA100.InUse != 4 || gA100.BorrowedByUser != 2 {
+		t.Fatalf("unexpected A100 state after borrowing 2: %+v", gA100)
+	}
+
+	gL40S, err := st.BorrowGPU(ctx, "L40S", 1)
+	if err != nil {
+		t.Fatalf("BorrowGPU(L40S, 1) failed: %v", err)
+	}
+	if gL40S.Available != 4 || gL40S.InUse != 2 || gL40S.BorrowedByUser != 1 {
+		t.Fatalf("unexpected L40S state after borrowing 1: %+v", gL40S)
+	}
+
+	// 6. Returning more than the user borrowed must be forbidden (even though A100 has 4 in_use).
+	if _, err := st.ReturnGPU(ctx, "A100", 3); !errors.Is(err, ErrReturnExceedsBorrowed) {
+		t.Fatalf("expected ErrReturnExceedsBorrowed for 3 A100s, got %v", err)
+	}
+
+	// 7. Reopening the database (which re-runs SeedGPUs) must preserve live stock and loan counts.
+	if err := st.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+	st2, err := Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("Reopen store failed: %v", err)
+	}
+	defer st2.Close()
+
+	reopenedA100, err := st2.GetGPU(ctx, "A100")
+	if err != nil {
+		t.Fatalf("GetGPU(A100) after reopen failed: %v", err)
+	}
+	if reopenedA100.Available != 0 || reopenedA100.InUse != 4 || reopenedA100.BorrowedByUser != 2 {
+		t.Fatalf("stock/loan not preserved across reopen: %+v", reopenedA100)
+	}
+
+	// 8. Returning the 2 borrowed A100s succeeds and restores original stock (2/4 available, 0 borrowed).
+	returnedA100, err := st2.ReturnGPU(ctx, "A100", 2)
+	if err != nil {
+		t.Fatalf("ReturnGPU(A100, 2) failed: %v", err)
+	}
+	if returnedA100.Available != 2 || returnedA100.InUse != 2 || returnedA100.BorrowedByUser != 0 {
+		t.Fatalf("unexpected A100 state after return: %+v", returnedA100)
+	}
+
+	// 9. Trying to return another A100 after returning all borrowed units must be forbidden.
+	if _, err := st2.ReturnGPU(ctx, "A100", 1); !errors.Is(err, ErrNotBorrowedByUser) {
+		t.Fatalf("expected ErrNotBorrowedByUser after full return, got %v", err)
+	}
+}

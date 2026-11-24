@@ -8,8 +8,16 @@ import (
 	"strings"
 )
 
-// ErrGPUNotFound is returned when a requested GPU model does not exist in the catalog.
-var ErrGPUNotFound = errors.New("GPU not found in infrastructure")
+// Sentinel errors for GPU lookup and borrow/return railguards.
+var (
+	ErrGPUNotFound           = errors.New("GPU not found in infrastructure")
+	ErrInvalidQuantity       = errors.New("quantity must be a positive integer")
+	ErrNoStock               = errors.New("no available GPU stock to borrow")
+	ErrInsufficientStock     = errors.New("insufficient available GPU stock")
+	ErrStockLimitExceeded    = errors.New("cannot return GPU above original stock limit")
+	ErrNotBorrowedByUser     = errors.New("GPU was not borrowed by the user")
+	ErrReturnExceedsBorrowed = errors.New("return quantity exceeds units borrowed by the user")
+)
 
 // GPU represents a GPU model in the infrastructure inventory.
 type GPU struct {
@@ -21,6 +29,7 @@ type GPU struct {
 	TotalQuantity          int    `json:"total_quantity"`
 	InUse                  int    `json:"in_use"`
 	Available              int    `json:"available"`
+	BorrowedByUser         int    `json:"borrowed_by_user"`
 	TotalMemoryGB          int    `json:"total_memory_gb"`
 	AvailableTotalMemoryGB int    `json:"available_total_memory_gb"`
 	Notes                  string `json:"notes"`
@@ -88,7 +97,8 @@ var defaultGPUSeed = []GPU{
 	},
 }
 
-// SeedGPUs idempotently inserts or updates the 5 required NVIDIA GPUs.
+// SeedGPUs idempotently inserts or updates static metadata for the 5 required NVIDIA GPUs
+// without clobbering live in_use counts on existing databases.
 func (s *Store) SeedGPUs(ctx context.Context) error {
 	const upsertSQL = `
 INSERT INTO gpus (id, name, architecture, memory_gb, mig_support, total_quantity, in_use, notes)
@@ -99,7 +109,6 @@ ON CONFLICT(id) DO UPDATE SET
 	memory_gb = excluded.memory_gb,
 	mig_support = excluded.mig_support,
 	total_quantity = excluded.total_quantity,
-	in_use = excluded.in_use,
 	notes = excluded.notes;
 `
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -146,16 +155,17 @@ func hydrateGPU(g *GPU) {
 // ListGPUs returns all GPUs in deterministic order.
 func (s *Store) ListGPUs(ctx context.Context) ([]GPU, error) {
 	const query = `
-SELECT id, name, architecture, memory_gb, mig_support, total_quantity, in_use, notes
-FROM gpus
-ORDER BY CASE id
+SELECT g.id, g.name, g.architecture, g.memory_gb, g.mig_support, g.total_quantity, g.in_use, COALESCE(l.borrowed_by_user, 0), g.notes
+FROM gpus g
+LEFT JOIN gpu_loans l ON l.gpu_id = g.id
+ORDER BY CASE g.id
 	WHEN 'a100-80gb' THEN 1
 	WHEN 'l40s-48gb' THEN 2
 	WHEN 'rtx4090-24gb' THEN 3
 	WHEN 'h100-80gb' THEN 4
 	WHEN 'a40-48gb' THEN 5
 	ELSE 99
-END, name ASC;
+END, g.name ASC;
 `
 	rows, err := s.db.QueryContext(ctx, query)
 	if err != nil {
@@ -174,6 +184,7 @@ END, name ASC;
 			&g.MIGSupport,
 			&g.TotalQuantity,
 			&g.InUse,
+			&g.BorrowedByUser,
 			&g.Notes,
 		); err != nil {
 			return nil, err
@@ -293,4 +304,159 @@ func (s *Store) FindGPUs(ctx context.Context, filter GPUFilter) ([]GPU, error) {
 	})
 
 	return matched, nil
+}
+
+// BorrowGPU decreases available stock (increases in_use) and records the borrowed units
+// for the user inside a single SQLite transaction.
+// Enforces railguards:
+// - quantity must be >= 1
+// - GPU must exist
+// - stock must be available (available > 0 and available >= quantity)
+func (s *Store) BorrowGPU(ctx context.Context, query string, quantity int) (*GPU, error) {
+	if quantity <= 0 {
+		return nil, fmt.Errorf("%w: got %d", ErrInvalidQuantity, quantity)
+	}
+
+	target, err := s.GetGPU(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var g GPU
+	err = tx.QueryRowContext(ctx, `
+SELECT g.id, g.name, g.architecture, g.memory_gb, g.mig_support, g.total_quantity, g.in_use, COALESCE(l.borrowed_by_user, 0), g.notes
+FROM gpus g
+LEFT JOIN gpu_loans l ON l.gpu_id = g.id
+WHERE g.id = ?;`, target.ID).Scan(
+		&g.ID,
+		&g.Name,
+		&g.Architecture,
+		&g.MemoryGB,
+		&g.MIGSupport,
+		&g.TotalQuantity,
+		&g.InUse,
+		&g.BorrowedByUser,
+		&g.Notes,
+	)
+	if err != nil {
+		return nil, err
+	}
+	hydrateGPU(&g)
+
+	if g.Available <= 0 {
+		return &g, fmt.Errorf("%w: cannot borrow %d %s because there is no available stock (0/%d available, all %d units are currently in use)",
+			ErrNoStock, quantity, g.Name, g.TotalQuantity, g.InUse)
+	}
+	if quantity > g.Available {
+		return &g, fmt.Errorf("%w: cannot borrow %d %s because only %d/%d units are currently available (%d in use)",
+			ErrInsufficientStock, quantity, g.Name, g.Available, g.TotalQuantity, g.InUse)
+	}
+
+	if _, err := tx.ExecContext(ctx, `UPDATE gpus SET in_use = in_use + ? WHERE id = ?;`, quantity, g.ID); err != nil {
+		return nil, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO gpu_loans (gpu_id, borrowed_by_user, updated_at)
+VALUES (?, ?, CURRENT_TIMESTAMP)
+ON CONFLICT(gpu_id) DO UPDATE SET
+	borrowed_by_user = borrowed_by_user + excluded.borrowed_by_user,
+	updated_at = CURRENT_TIMESTAMP;`, g.ID, quantity); err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+
+	g.InUse += quantity
+	g.BorrowedByUser += quantity
+	hydrateGPU(&g)
+	return &g, nil
+}
+
+// ReturnGPU increases available stock (decreases in_use) and decrements the user's
+// borrowed count inside a single SQLite transaction.
+// Enforces railguards:
+// - quantity must be >= 1
+// - GPU must exist
+// - stock cannot be returned over the original total_quantity limit (in_use cannot drop below 0)
+// - GPUs can only be returned if they were previously borrowed by the user (borrowed_by_user >= quantity)
+func (s *Store) ReturnGPU(ctx context.Context, query string, quantity int) (*GPU, error) {
+	if quantity <= 0 {
+		return nil, fmt.Errorf("%w: got %d", ErrInvalidQuantity, quantity)
+	}
+
+	target, err := s.GetGPU(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var g GPU
+	err = tx.QueryRowContext(ctx, `
+SELECT g.id, g.name, g.architecture, g.memory_gb, g.mig_support, g.total_quantity, g.in_use, COALESCE(l.borrowed_by_user, 0), g.notes
+FROM gpus g
+LEFT JOIN gpu_loans l ON l.gpu_id = g.id
+WHERE g.id = ?;`, target.ID).Scan(
+		&g.ID,
+		&g.Name,
+		&g.Architecture,
+		&g.MemoryGB,
+		&g.MIGSupport,
+		&g.TotalQuantity,
+		&g.InUse,
+		&g.BorrowedByUser,
+		&g.Notes,
+	)
+	if err != nil {
+		return nil, err
+	}
+	hydrateGPU(&g)
+
+	if g.InUse <= 0 || g.Available >= g.TotalQuantity {
+		return &g, fmt.Errorf("%w: %s stock is already at its maximum original limit (%d/%d available, 0 in use)",
+			ErrStockLimitExceeded, g.Name, g.Available, g.TotalQuantity)
+	}
+	if g.BorrowedByUser <= 0 {
+		return &g, fmt.Errorf("%w: you have 0 %s units borrowed (the %d unit(s) currently in use were not borrowed by you and cannot be returned)",
+			ErrNotBorrowedByUser, g.Name, g.InUse)
+	}
+	if quantity > g.BorrowedByUser {
+		return &g, fmt.Errorf("%w: cannot return %d %s because you only have %d unit(s) currently borrowed",
+			ErrReturnExceedsBorrowed, quantity, g.Name, g.BorrowedByUser)
+	}
+	if g.InUse-quantity < 0 || g.Available+quantity > g.TotalQuantity {
+		return &g, fmt.Errorf("%w: returning %d %s would exceed the original stock limit of %d units (currently %d/%d available)",
+			ErrStockLimitExceeded, quantity, g.Name, g.TotalQuantity, g.Available, g.TotalQuantity)
+	}
+
+	if _, err := tx.ExecContext(ctx, `UPDATE gpus SET in_use = in_use - ? WHERE id = ?;`, quantity, g.ID); err != nil {
+		return nil, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+UPDATE gpu_loans
+SET borrowed_by_user = borrowed_by_user - ?, updated_at = CURRENT_TIMESTAMP
+WHERE gpu_id = ?;`, quantity, g.ID); err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+
+	g.InUse -= quantity
+	g.BorrowedByUser -= quantity
+	hydrateGPU(&g)
+	return &g, nil
 }

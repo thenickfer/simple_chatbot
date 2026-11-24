@@ -14,21 +14,23 @@ import (
 	"gpu-assistant/app/internal/store"
 )
 
-// Compile-time checks that all 4 tools implement langchaingo/tools.Tool.
+// Compile-time checks that all 5 tools implement langchaingo/tools.Tool.
 var (
 	_ tools.Tool = (*ListGPUsTool)(nil)
 	_ tools.Tool = (*GetGPUTool)(nil)
 	_ tools.Tool = (*CheckAvailabilityTool)(nil)
 	_ tools.Tool = (*FindGPUsTool)(nil)
+	_ tools.Tool = (*BorrowOrReturnGPUTool)(nil)
 )
 
-// NewTools returns the 4 typed, read-only GPU tools backed by the SQLite Store.
+// NewTools returns the 5 typed GPU tools backed by the SQLite Store.
 func NewTools(st *store.Store) []tools.Tool {
 	return []tools.Tool{
 		&ListGPUsTool{store: st},
 		&GetGPUTool{store: st},
 		&CheckAvailabilityTool{store: st},
 		&FindGPUsTool{store: st},
+		&BorrowOrReturnGPUTool{store: st},
 	}
 }
 
@@ -109,6 +111,32 @@ func LLMToolDefinitions() []llms.Tool {
 							"description": "Optional architecture filter (e.g. 'Ampere', 'Ada Lovelace', 'Hopper')",
 						},
 					},
+				},
+			},
+		},
+		{
+			Type: "function",
+			Function: &llms.FunctionDefinition{
+				Name:        "borrow_or_return_gpu",
+				Description: "Borrow or return GPU units in the infrastructure stock. Borrowing decreases available stock (increases in_use) and records the user's loan. Returning increases available stock (decreases in_use). Enforces railguards: cannot borrow when stock is 0 or insufficient; cannot return above the original total_quantity limit; can only return GPUs previously borrowed by the user.",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"action": map[string]any{
+							"type":        "string",
+							"enum":        []string{"borrow", "return"},
+							"description": "Operation to perform: 'borrow' to check out GPUs or 'return' to give back GPUs you previously borrowed",
+						},
+						"name": map[string]any{
+							"type":        "string",
+							"description": "GPU model name (e.g. 'A100', 'L40S', 'RTX 4090', 'H100', 'A40')",
+						},
+						"quantity": map[string]any{
+							"type":        "integer",
+							"description": "Number of GPU units to borrow or return (positive integer, default 1)",
+						},
+					},
+					"required": []string{"action", "name"},
 				},
 			},
 		},
@@ -415,6 +443,254 @@ func (t *FindGPUsTool) Call(ctx context.Context, input string) (string, error) {
 		return "", err
 	}
 	return string(b), nil
+}
+
+// 5. borrow_or_return_gpu
+
+type BorrowOrReturnGPUTool struct {
+	store *store.Store
+}
+
+func (t *BorrowOrReturnGPUTool) Name() string {
+	return "borrow_or_return_gpu"
+}
+
+func (t *BorrowOrReturnGPUTool) Description() string {
+	return "Borrows or returns GPU units, updating available stock and enforcing stock and user-ownership railguards. Accepts JSON {\"action\": \"borrow\"|\"return\", \"name\": \"A100\", \"quantity\": 1}."
+}
+
+type borrowOrReturnResponse struct {
+	Allowed        bool       `json:"allowed"`
+	Action         string     `json:"action"`
+	GPUName        string     `json:"gpu_name,omitempty"`
+	Query          string     `json:"query"`
+	Quantity       int        `json:"quantity"`
+	ForbiddenRule  string     `json:"forbidden_rule,omitempty"`
+	Reason         string     `json:"reason,omitempty"`
+	Message        string     `json:"message"`
+	GPU            *store.GPU `json:"gpu,omitempty"`
+	BorrowedByUser int        `json:"borrowed_by_user"`
+	ExistingModels []string   `json:"existing_models,omitempty"`
+}
+
+func (t *BorrowOrReturnGPUTool) Call(ctx context.Context, input string) (string, error) {
+	action, name, qty, qtyExplicit := parseLoanInput(input)
+	if !qtyExplicit {
+		qty = 1
+	}
+
+	marshalResp := func(r borrowOrReturnResponse) (string, error) {
+		b, err := json.MarshalIndent(r, "", "  ")
+		if err != nil {
+			return "", err
+		}
+		return string(b), nil
+	}
+
+	if action != "borrow" && action != "return" {
+		reason := fmt.Sprintf("invalid action %q: must be 'borrow' or 'return'", action)
+		return marshalResp(borrowOrReturnResponse{
+			Allowed:       false,
+			Action:        action,
+			Query:         name,
+			Quantity:      qty,
+			ForbiddenRule: "invalid_action",
+			Reason:        reason,
+			Message:       "Operation forbidden: " + reason + ".",
+		})
+	}
+
+	if qty <= 0 {
+		reason := fmt.Sprintf("quantity must be a positive integer (at least 1), got %d", qty)
+		return marshalResp(borrowOrReturnResponse{
+			Allowed:       false,
+			Action:        action,
+			Query:         name,
+			Quantity:      qty,
+			ForbiddenRule: "invalid_quantity",
+			Reason:        reason,
+			Message:       "Operation forbidden: " + reason + ".",
+		})
+	}
+
+	var (
+		gpu *store.GPU
+		err error
+	)
+	if action == "borrow" {
+		gpu, err = t.store.BorrowGPU(ctx, name, qty)
+	} else {
+		gpu, err = t.store.ReturnGPU(ctx, name, qty)
+	}
+
+	if err != nil {
+		if errors.Is(err, store.ErrGPUNotFound) {
+			all, _ := t.store.ListGPUs(ctx)
+			names := make([]string, 0, len(all))
+			for _, g := range all {
+				names = append(names, fmt.Sprintf("%s (%d/%d available, %d borrowed by you)", g.Name, g.Available, g.TotalQuantity, g.BorrowedByUser))
+			}
+			reason := fmt.Sprintf("GPU not found in infrastructure: %q does not exist in our catalog.", name)
+			return marshalResp(borrowOrReturnResponse{
+				Allowed:        false,
+				Action:         action,
+				Query:          name,
+				Quantity:       qty,
+				ForbiddenRule:  "gpu_not_found",
+				Reason:         reason,
+				Message:        "Operation forbidden: " + reason,
+				ExistingModels: names,
+			})
+		}
+
+		rule := classifyLoanGuardrailError(err)
+		if rule != "" {
+			resp := borrowOrReturnResponse{
+				Allowed:       false,
+				Action:        action,
+				Query:         name,
+				Quantity:      qty,
+				ForbiddenRule: rule,
+				Reason:        err.Error(),
+				Message:       "Operation forbidden: " + err.Error(),
+				GPU:           gpu,
+			}
+			if gpu != nil {
+				resp.GPUName = gpu.Name
+				resp.BorrowedByUser = gpu.BorrowedByUser
+			}
+			return marshalResp(resp)
+		}
+
+		return "", err
+	}
+
+	var msg string
+	if action == "borrow" {
+		msg = fmt.Sprintf("Borrowed %d %s. Stock updated: %d/%d available (%d in use, %d currently borrowed by you).",
+			qty, gpu.Name, gpu.Available, gpu.TotalQuantity, gpu.InUse, gpu.BorrowedByUser)
+	} else {
+		msg = fmt.Sprintf("Returned %d %s. Stock updated: %d/%d available (%d in use, %d currently borrowed by you).",
+			qty, gpu.Name, gpu.Available, gpu.TotalQuantity, gpu.InUse, gpu.BorrowedByUser)
+	}
+
+	return marshalResp(borrowOrReturnResponse{
+		Allowed:        true,
+		Action:         action,
+		GPUName:        gpu.Name,
+		Query:          name,
+		Quantity:       qty,
+		Message:        msg,
+		GPU:            gpu,
+		BorrowedByUser: gpu.BorrowedByUser,
+	})
+}
+
+func classifyLoanGuardrailError(err error) string {
+	switch {
+	case errors.Is(err, store.ErrInvalidQuantity):
+		return "invalid_quantity"
+	case errors.Is(err, store.ErrNoStock):
+		return "no_stock_available"
+	case errors.Is(err, store.ErrInsufficientStock):
+		return "insufficient_stock"
+	case errors.Is(err, store.ErrStockLimitExceeded):
+		return "stock_limit_exceeded"
+	case errors.Is(err, store.ErrNotBorrowedByUser):
+		return "not_borrowed_by_user"
+	case errors.Is(err, store.ErrReturnExceedsBorrowed):
+		return "return_exceeds_borrowed"
+	default:
+		return ""
+	}
+}
+
+func normalizeLoanAction(raw string) string {
+	s := strings.ToLower(strings.TrimSpace(raw))
+	switch s {
+	case "borrow", "checkout", "check_out", "reserve", "take", "rent", "loan", "acquire", "empréstimo", "emprestar", "pegar":
+		return "borrow"
+	case "return", "release", "give_back", "giveback", "checkin", "check_in", "devolver", "retornar":
+		return "return"
+	default:
+		return s
+	}
+}
+
+func parseLoanInput(input string) (action, name string, qty int, qtyExplicit bool) {
+	raw := strings.TrimSpace(input)
+	if raw == "" {
+		return "", "", 1, false
+	}
+	if strings.HasPrefix(raw, "{") {
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(raw), &payload); err == nil {
+			for _, k := range []string{"action", "operation", "op", "type"} {
+				if v, ok := payload[k]; ok {
+					if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
+						action = normalizeLoanAction(s)
+						break
+					}
+				}
+			}
+			for _, k := range []string{"name", "gpu", "model", "query", "id"} {
+				if v, ok := payload[k]; ok {
+					if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
+						name = strings.TrimSpace(s)
+						break
+					}
+				}
+			}
+			for _, k := range []string{"quantity", "count", "units", "amount"} {
+				if v, ok := payload[k]; ok && v != nil {
+					switch val := v.(type) {
+					case float64:
+						qty = int(val)
+						qtyExplicit = true
+					case int:
+						qty = val
+						qtyExplicit = true
+					case string:
+						if parsed, err := strconv.Atoi(strings.TrimSpace(val)); err == nil {
+							qty = parsed
+							qtyExplicit = true
+						}
+					}
+					if qtyExplicit {
+						break
+					}
+				}
+			}
+			return action, name, qty, qtyExplicit
+		}
+	}
+
+	// Plain fallback format: "borrow, A100, 2" or "return A100"
+	parts := strings.Split(raw, ",")
+	if len(parts) >= 2 {
+		action = normalizeLoanAction(strings.Trim(parts[0], `"' `))
+		name = strings.Trim(parts[1], `"' `)
+		if len(parts) >= 3 {
+			if parsed, err := strconv.Atoi(strings.TrimSpace(parts[2])); err == nil {
+				qty = parsed
+				qtyExplicit = true
+			}
+		}
+		return action, name, qty, qtyExplicit
+	}
+
+	fields := strings.Fields(raw)
+	if len(fields) >= 2 {
+		action = normalizeLoanAction(fields[0])
+		if parsed, err := strconv.Atoi(fields[len(fields)-1]); err == nil && len(fields) >= 3 {
+			qty = parsed
+			qtyExplicit = true
+			name = strings.Join(fields[1:len(fields)-1], " ")
+		} else {
+			name = strings.Join(fields[1:], " ")
+		}
+	}
+	return action, name, qty, qtyExplicit
 }
 
 // Input parsing helpers for flexible JSON or plain-string tool calls.
