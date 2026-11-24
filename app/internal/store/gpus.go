@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"sort"
@@ -10,13 +11,16 @@ import (
 
 // Sentinel errors for GPU lookup and borrow/return railguards.
 var (
-	ErrGPUNotFound           = errors.New("GPU not found in infrastructure")
-	ErrInvalidQuantity       = errors.New("quantity must be a positive integer")
-	ErrNoStock               = errors.New("no available GPU stock to borrow")
-	ErrInsufficientStock     = errors.New("insufficient available GPU stock")
-	ErrStockLimitExceeded    = errors.New("cannot return GPU above original stock limit")
-	ErrNotBorrowedByUser     = errors.New("GPU was not borrowed by the user")
-	ErrReturnExceedsBorrowed = errors.New("return quantity exceeds units borrowed by the user")
+	ErrGPUNotFound               = errors.New("GPU not found in infrastructure")
+	ErrLoanPasswordNotConfigured = errors.New("GPU loan password is not configured on the server")
+	ErrLoanPasswordRequired      = errors.New("loan password is required to borrow or return GPUs")
+	ErrInvalidLoanPassword       = errors.New("invalid loan password")
+	ErrInvalidQuantity           = errors.New("quantity must be a positive integer")
+	ErrNoStock                   = errors.New("no available GPU stock to borrow")
+	ErrInsufficientStock         = errors.New("insufficient available GPU stock")
+	ErrStockLimitExceeded        = errors.New("cannot return GPU above original stock limit")
+	ErrNotBorrowedByUser         = errors.New("GPU was not borrowed by the user")
+	ErrReturnExceedsBorrowed     = errors.New("return quantity exceeds units borrowed by the user")
 )
 
 // GPU represents a GPU model in the infrastructure inventory.
@@ -306,13 +310,32 @@ func (s *Store) FindGPUs(ctx context.Context, filter GPUFilter) ([]GPU, error) {
 	return matched, nil
 }
 
+func (s *Store) verifyLoanPassword(provided string) error {
+	expected := strings.TrimSpace(s.loanPassword)
+	if expected == "" {
+		return fmt.Errorf("%w: set GPU_LOAN_PASSWORD in .env to enable borrow/return operations", ErrLoanPasswordNotConfigured)
+	}
+	candidate := strings.TrimSpace(provided)
+	if candidate == "" {
+		return fmt.Errorf("%w: please provide the loan password to authorize this operation", ErrLoanPasswordRequired)
+	}
+	if subtle.ConstantTimeCompare([]byte(candidate), []byte(expected)) != 1 {
+		return fmt.Errorf("%w: the provided password does not match the configured GPU loan password", ErrInvalidLoanPassword)
+	}
+	return nil
+}
+
 // BorrowGPU decreases available stock (increases in_use) and records the borrowed units
 // for the user inside a single SQLite transaction.
 // Enforces railguards:
+// - loan password must match GPU_LOAN_PASSWORD configured in the store
 // - quantity must be >= 1
 // - GPU must exist
 // - stock must be available (available > 0 and available >= quantity)
-func (s *Store) BorrowGPU(ctx context.Context, query string, quantity int) (*GPU, error) {
+func (s *Store) BorrowGPU(ctx context.Context, query string, quantity int, password string) (*GPU, error) {
+	if err := s.verifyLoanPassword(password); err != nil {
+		return nil, err
+	}
 	if quantity <= 0 {
 		return nil, fmt.Errorf("%w: got %d", ErrInvalidQuantity, quantity)
 	}
@@ -383,11 +406,15 @@ ON CONFLICT(gpu_id) DO UPDATE SET
 // ReturnGPU increases available stock (decreases in_use) and decrements the user's
 // borrowed count inside a single SQLite transaction.
 // Enforces railguards:
+// - loan password must match GPU_LOAN_PASSWORD configured in the store
 // - quantity must be >= 1
 // - GPU must exist
 // - stock cannot be returned over the original total_quantity limit (in_use cannot drop below 0)
 // - GPUs can only be returned if they were previously borrowed by the user (borrowed_by_user >= quantity)
-func (s *Store) ReturnGPU(ctx context.Context, query string, quantity int) (*GPU, error) {
+func (s *Store) ReturnGPU(ctx context.Context, query string, quantity int, password string) (*GPU, error) {
+	if err := s.verifyLoanPassword(password); err != nil {
+		return nil, err
+	}
 	if quantity <= 0 {
 		return nil, fmt.Errorf("%w: got %d", ErrInvalidQuantity, quantity)
 	}

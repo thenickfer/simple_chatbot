@@ -22,12 +22,13 @@ This document records the architectural decisions, trade-offs, and system ration
 
 ---
 
-## 3. Typed Read-Only Tools vs. Raw Text-to-SQL
-- **Decision**: Implement 4 typed, read-only `langchaingo` tools (`list_gpus`, `get_gpu`, `check_availability`, `find_gpus`) that query structured SQLite repositories through safe parameterized methods, instead of allowing raw Text-to-SQL generation.
+## 3. Typed Tools with Transactional Railguards vs. Raw Text-to-SQL
+- **Decision**: Implement 5 typed `langchaingo` tools — 4 read-only query tools (`list_gpus`, `get_gpu`, `check_availability`, `find_gpus`) plus 1 guarded mutation tool (`borrow_or_return_gpu`) — querying structured SQLite repositories through safe parameterized methods, instead of allowing raw Text-to-SQL generation.
 - **Rationale**:
-  - **Zero SQL Injection / Mutation**: The LLM cannot execute `DROP`, `UPDATE`, `INSERT`, or unconstrained table queries.
-  - **Deterministic Filtering**: Numerical ranges (e.g., `min_vram_gb`, `only_available`) and boolean MIG capabilities are validated and executed deterministically.
-  - **Reliable Tool Calling on Small Models**: Compact local models like `qwen2.5:3b` handle typed function calling schemas (`tools.Tool`) far more reliably than generating dialect-specific SQL syntax.
+  - **Zero SQL Injection / Arbitrary Mutation**: The LLM cannot execute `DROP`, arbitrary `UPDATE`/`INSERT`, or unconstrained table queries.
+  - **Defense-in-Depth Railguards**: `borrow_or_return_gpu` enforces password authorization (`GPU_LOAN_PASSWORD`, validated inside the SQLite store in constant time so the LLM never sees the env secret), stock availability checks, original `total_quantity` upper-bound checks, and user loan ownership (`gpu_loans` table) inside a single SQLite transaction.
+  - **Deterministic Filtering**: Numerical ranges (e.g., `min_memory_gb`, `only_available`) and boolean MIG capabilities are validated and executed deterministically.
+  - **Reliable Tool Calling on Small Models**: Compact local models like `qwen2.5:3b` / `qwen3.5:2b` handle typed function calling schemas (`tools.Tool`) far more reliably than generating dialect-specific SQL syntax.
 
 ---
 
@@ -48,7 +49,7 @@ This document records the architectural decisions, trade-offs, and system ration
   | `rtx4090-24gb` | NVIDIA RTX 4090 | Ada Lovelace | 24 | No | 3 | 3 | 0 | Fully occupied (100% in-use) to test zero-availability responses |
   | `h100-80gb` | NVIDIA H100 | Hopper | 80 | Yes | 2 | 0 | 2 | Fully available (0% in-use) top-tier LLM training accelerator |
   | `a40-48gb` | NVIDIA A40 | Ampere | 48 | No | 4 | 4 | 0 | Fully occupied (100% in-use) virtualization accelerator |
-- **Rationale**: Provides clear contrast between available and exhausted hardware, testing the model's accuracy in distinguishing total `quantity` from current `in_use` and `available = quantity - in_use`.
+- **Rationale**: Preserves the exact 5 models, total quantities (19), and VRAM specs from the challenge table while simulating realistic `in_use` utilization so the assistant can demonstrate distinguishing total `quantity` from simulated `in_use` and `available = quantity - in_use`, as well as transactional borrow/return flows.
 
 ---
 
@@ -69,5 +70,6 @@ This document records the architectural decisions, trade-offs, and system ration
 ---
 
 ## 8. Current Limitations & Future Work
-- **Static In-Use Counts**: GPU allocation is currently read-only and deterministic; future iterations could add authenticated `reserve_gpu` and `release_gpu` mutations with user session leasing.
-- **Local Model Context Limit**: Compact 3B/4B models operate comfortably within 4k-8k token context windows; conversation compaction or summarization can be introduced if conversation histories extend beyond 50 turns.
+- **Simulated Availability & Single-Tenant Loan Password**: `in_use` counts are simulated locally in SQLite rather than pulled from live cluster telemetry (e.g. Slurm/Kubernetes/DCGM), and `borrow_or_return_gpu` uses a single shared `GPU_LOAN_PASSWORD` rather than per-user RBAC/OAuth.
+- **Observability**: Per-session timestamped trace logs (`app/logs/agent-*.log`, with automatic password redaction) are implemented for local debugging and demos; production deployments would export structured OpenTelemetry traces.
+- **Local Model Context Limit**: Compact 2B–4B models operate comfortably within 4k–8k token context windows; conversation compaction or summarization can be introduced if conversation histories extend beyond 50 turns.

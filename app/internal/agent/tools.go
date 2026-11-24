@@ -118,7 +118,7 @@ func LLMToolDefinitions() []llms.Tool {
 			Type: "function",
 			Function: &llms.FunctionDefinition{
 				Name:        "borrow_or_return_gpu",
-				Description: "Borrow or return GPU units in the infrastructure stock. Borrowing decreases available stock (increases in_use) and records the user's loan. Returning increases available stock (decreases in_use). Enforces railguards: cannot borrow when stock is 0 or insufficient; cannot return above the original total_quantity limit; can only return GPUs previously borrowed by the user.",
+				Description: "Borrow or return GPU units in the infrastructure stock. Requires the loan authorization password provided by the user (verified by the backend store). Borrowing decreases available stock (increases in_use) and records the user's loan. Returning increases available stock (decreases in_use). Enforces railguards: valid password required; cannot borrow when stock is 0 or insufficient; cannot return above the original total_quantity limit; can only return GPUs previously borrowed by the user.",
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
@@ -135,8 +135,12 @@ func LLMToolDefinitions() []llms.Tool {
 							"type":        "integer",
 							"description": "Number of GPU units to borrow or return (positive integer, default 1)",
 						},
+						"password": map[string]any{
+							"type":        "string",
+							"description": "Loan authorization password explicitly provided by the user in chat. Never guess or invent a password; ask the user if they have not provided it.",
+						},
 					},
-					"required": []string{"action", "name"},
+					"required": []string{"action", "name", "password"},
 				},
 			},
 		},
@@ -474,7 +478,7 @@ type borrowOrReturnResponse struct {
 }
 
 func (t *BorrowOrReturnGPUTool) Call(ctx context.Context, input string) (string, error) {
-	action, name, qty, qtyExplicit := parseLoanInput(input)
+	action, name, qty, qtyExplicit, password := parseLoanInput(input)
 	if !qtyExplicit {
 		qty = 1
 	}
@@ -518,9 +522,9 @@ func (t *BorrowOrReturnGPUTool) Call(ctx context.Context, input string) (string,
 		err error
 	)
 	if action == "borrow" {
-		gpu, err = t.store.BorrowGPU(ctx, name, qty)
+		gpu, err = t.store.BorrowGPU(ctx, name, qty, password)
 	} else {
-		gpu, err = t.store.ReturnGPU(ctx, name, qty)
+		gpu, err = t.store.ReturnGPU(ctx, name, qty, password)
 	}
 
 	if err != nil {
@@ -588,6 +592,12 @@ func (t *BorrowOrReturnGPUTool) Call(ctx context.Context, input string) (string,
 
 func classifyLoanGuardrailError(err error) string {
 	switch {
+	case errors.Is(err, store.ErrLoanPasswordNotConfigured):
+		return "loan_password_not_configured"
+	case errors.Is(err, store.ErrLoanPasswordRequired):
+		return "password_required"
+	case errors.Is(err, store.ErrInvalidLoanPassword):
+		return "invalid_password"
 	case errors.Is(err, store.ErrInvalidQuantity):
 		return "invalid_quantity"
 	case errors.Is(err, store.ErrNoStock):
@@ -617,10 +627,10 @@ func normalizeLoanAction(raw string) string {
 	}
 }
 
-func parseLoanInput(input string) (action, name string, qty int, qtyExplicit bool) {
+func parseLoanInput(input string) (action, name string, qty int, qtyExplicit bool, password string) {
 	raw := strings.TrimSpace(input)
 	if raw == "" {
-		return "", "", 1, false
+		return "", "", 1, false, ""
 	}
 	if strings.HasPrefix(raw, "{") {
 		var payload map[string]any
@@ -661,11 +671,19 @@ func parseLoanInput(input string) (action, name string, qty int, qtyExplicit boo
 					}
 				}
 			}
-			return action, name, qty, qtyExplicit
+			for _, k := range []string{"password", "pass", "pin", "secret", "senha"} {
+				if v, ok := payload[k]; ok && v != nil {
+					if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
+						password = strings.TrimSpace(s)
+						break
+					}
+				}
+			}
+			return action, name, qty, qtyExplicit, password
 		}
 	}
 
-	// Plain fallback format: "borrow, A100, 2" or "return A100"
+	// Plain fallback format: "borrow, A100, 2, mypass" or "return A100"
 	parts := strings.Split(raw, ",")
 	if len(parts) >= 2 {
 		action = normalizeLoanAction(strings.Trim(parts[0], `"' `))
@@ -674,9 +692,14 @@ func parseLoanInput(input string) (action, name string, qty int, qtyExplicit boo
 			if parsed, err := strconv.Atoi(strings.TrimSpace(parts[2])); err == nil {
 				qty = parsed
 				qtyExplicit = true
+			} else {
+				password = strings.Trim(parts[2], `"' `)
 			}
 		}
-		return action, name, qty, qtyExplicit
+		if len(parts) >= 4 {
+			password = strings.Trim(parts[3], `"' `)
+		}
+		return action, name, qty, qtyExplicit, password
 	}
 
 	fields := strings.Fields(raw)
@@ -690,7 +713,7 @@ func parseLoanInput(input string) (action, name string, qty int, qtyExplicit boo
 			name = strings.Join(fields[1:], " ")
 		}
 	}
-	return action, name, qty, qtyExplicit
+	return action, name, qty, qtyExplicit, password
 }
 
 // Input parsing helpers for flexible JSON or plain-string tool calls.

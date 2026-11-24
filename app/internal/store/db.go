@@ -14,8 +14,17 @@ const DefaultDBPath = "./gpu_assistant.db"
 
 // Store manages the SQLite database for GPU inventory and conversation history.
 type Store struct {
-	db     *sql.DB
-	dbPath string
+	db           *sql.DB
+	dbPath       string
+	loanPassword string
+}
+
+// SetLoanPassword overrides the expected password for GPU borrow/return operations (useful in tests).
+func (s *Store) SetLoanPassword(password string) {
+	if s == nil {
+		return
+	}
+	s.loanPassword = strings.TrimSpace(password)
 }
 
 // OpenFromEnv opens the SQLite store using SQLITE_PATH (defaulting to ./gpu_assistant.db).
@@ -41,8 +50,9 @@ func Open(ctx context.Context, dbPath string) (*Store, error) {
 	db.SetMaxOpenConns(1)
 
 	s := &Store{
-		db:     db,
-		dbPath: dbPath,
+		db:           db,
+		dbPath:       dbPath,
+		loanPassword: strings.TrimSpace(os.Getenv("GPU_LOAN_PASSWORD")),
 	}
 
 	if err := s.Migrate(ctx); err != nil {

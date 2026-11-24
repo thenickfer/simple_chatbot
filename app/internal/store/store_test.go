@@ -216,34 +216,59 @@ func TestChatMessageHistoryPersistenceAcrossReopenAndClear(t *testing.T) {
 func TestBorrowAndReturnGPURailguardsAndPersistence(t *testing.T) {
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "loans.db")
+	const testPass = "lab-secret-123"
 
+	// 0a. Fail-closed when GPU_LOAN_PASSWORD is not configured.
+	t.Setenv("GPU_LOAN_PASSWORD", "")
+	stUnconfigured, err := Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("Open store failed: %v", err)
+	}
+	if _, err := stUnconfigured.BorrowGPU(ctx, "A100", 1, testPass); !errors.Is(err, ErrLoanPasswordNotConfigured) {
+		t.Fatalf("expected ErrLoanPasswordNotConfigured, got %v", err)
+	}
+	_ = stUnconfigured.Close()
+
+	// Configure password via env and reopen.
+	t.Setenv("GPU_LOAN_PASSWORD", testPass)
 	st, err := Open(ctx, dbPath)
 	if err != nil {
 		t.Fatalf("Open store failed: %v", err)
 	}
 
+	// 0b. Missing or wrong password must be forbidden.
+	if _, err := st.BorrowGPU(ctx, "A100", 1, ""); !errors.Is(err, ErrLoanPasswordRequired) {
+		t.Fatalf("expected ErrLoanPasswordRequired, got %v", err)
+	}
+	if _, err := st.BorrowGPU(ctx, "A100", 1, "wrong-pass"); !errors.Is(err, ErrInvalidLoanPassword) {
+		t.Fatalf("expected ErrInvalidLoanPassword, got %v", err)
+	}
+	if _, err := st.ReturnGPU(ctx, "A100", 1, "wrong-pass"); !errors.Is(err, ErrInvalidLoanPassword) {
+		t.Fatalf("expected ErrInvalidLoanPassword on return, got %v", err)
+	}
+
 	// 1. Borrowing when no stock is available (RTX 4090: 3/3 in use, 0 available) must be forbidden.
-	if _, err := st.BorrowGPU(ctx, "RTX 4090", 1); !errors.Is(err, ErrNoStock) {
+	if _, err := st.BorrowGPU(ctx, "RTX 4090", 1, testPass); !errors.Is(err, ErrNoStock) {
 		t.Fatalf("expected ErrNoStock for RTX 4090, got %v", err)
 	}
 
 	// 2. Borrowing more than available (A100: 2 available) must be forbidden.
-	if _, err := st.BorrowGPU(ctx, "A100", 3); !errors.Is(err, ErrInsufficientStock) {
+	if _, err := st.BorrowGPU(ctx, "A100", 3, testPass); !errors.Is(err, ErrInsufficientStock) {
 		t.Fatalf("expected ErrInsufficientStock for 3 A100s, got %v", err)
 	}
 
 	// 3. Returning when already at full original stock (H100: 2/2 available, 0 in use) must be forbidden.
-	if _, err := st.ReturnGPU(ctx, "H100", 1); !errors.Is(err, ErrStockLimitExceeded) {
+	if _, err := st.ReturnGPU(ctx, "H100", 1, testPass); !errors.Is(err, ErrStockLimitExceeded) {
 		t.Fatalf("expected ErrStockLimitExceeded for H100, got %v", err)
 	}
 
 	// 4. Returning a GPU that has units in_use (A100: 2/4 in use) but was NOT borrowed by the user must be forbidden.
-	if _, err := st.ReturnGPU(ctx, "A100", 1); !errors.Is(err, ErrNotBorrowedByUser) {
+	if _, err := st.ReturnGPU(ctx, "A100", 1, testPass); !errors.Is(err, ErrNotBorrowedByUser) {
 		t.Fatalf("expected ErrNotBorrowedByUser for A100, got %v", err)
 	}
 
 	// 5. Borrowing multiple GPUs succeeds (2 A100s + 1 L40S).
-	gA100, err := st.BorrowGPU(ctx, "A100", 2)
+	gA100, err := st.BorrowGPU(ctx, "A100", 2, testPass)
 	if err != nil {
 		t.Fatalf("BorrowGPU(A100, 2) failed: %v", err)
 	}
@@ -251,7 +276,7 @@ func TestBorrowAndReturnGPURailguardsAndPersistence(t *testing.T) {
 		t.Fatalf("unexpected A100 state after borrowing 2: %+v", gA100)
 	}
 
-	gL40S, err := st.BorrowGPU(ctx, "L40S", 1)
+	gL40S, err := st.BorrowGPU(ctx, "L40S", 1, testPass)
 	if err != nil {
 		t.Fatalf("BorrowGPU(L40S, 1) failed: %v", err)
 	}
@@ -260,7 +285,7 @@ func TestBorrowAndReturnGPURailguardsAndPersistence(t *testing.T) {
 	}
 
 	// 6. Returning more than the user borrowed must be forbidden (even though A100 has 4 in_use).
-	if _, err := st.ReturnGPU(ctx, "A100", 3); !errors.Is(err, ErrReturnExceedsBorrowed) {
+	if _, err := st.ReturnGPU(ctx, "A100", 3, testPass); !errors.Is(err, ErrReturnExceedsBorrowed) {
 		t.Fatalf("expected ErrReturnExceedsBorrowed for 3 A100s, got %v", err)
 	}
 
@@ -283,7 +308,7 @@ func TestBorrowAndReturnGPURailguardsAndPersistence(t *testing.T) {
 	}
 
 	// 8. Returning the 2 borrowed A100s succeeds and restores original stock (2/4 available, 0 borrowed).
-	returnedA100, err := st2.ReturnGPU(ctx, "A100", 2)
+	returnedA100, err := st2.ReturnGPU(ctx, "A100", 2, testPass)
 	if err != nil {
 		t.Fatalf("ReturnGPU(A100, 2) failed: %v", err)
 	}
@@ -292,7 +317,7 @@ func TestBorrowAndReturnGPURailguardsAndPersistence(t *testing.T) {
 	}
 
 	// 9. Trying to return another A100 after returning all borrowed units must be forbidden.
-	if _, err := st2.ReturnGPU(ctx, "A100", 1); !errors.Is(err, ErrNotBorrowedByUser) {
+	if _, err := st2.ReturnGPU(ctx, "A100", 1, testPass); !errors.Is(err, ErrNotBorrowedByUser) {
 		t.Fatalf("expected ErrNotBorrowedByUser after full return, got %v", err)
 	}
 }

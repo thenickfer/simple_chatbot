@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -169,13 +170,39 @@ func (l *TraceLogger) LogThought(turn uint64, source, thought string) {
 	l.writef("[%s] [TURN %d] [THOUGHT] (source=%s)\n%s\n\n", nowTS(), turn, source, trimmed)
 }
 
-// LogToolCall records a tool invocation requested by the model.
+// LogToolCall records a tool invocation requested by the model (redacting sensitive fields like passwords).
 func (l *TraceLogger) LogToolCall(turn uint64, callID, toolName, args string) {
-	trimmedArgs := strings.TrimSpace(args)
+	trimmedArgs := redactSensitiveArgs(strings.TrimSpace(args))
 	if trimmedArgs == "" {
 		trimmedArgs = "{}"
 	}
 	l.writef("[%s] [TURN %d] [TOOL_CALL] id=%s name=%s\nargs: %s\n\n", nowTS(), turn, callID, toolName, trimmedArgs)
+}
+
+func redactSensitiveArgs(raw string) string {
+	if raw == "" || !strings.HasPrefix(raw, "{") {
+		return raw
+	}
+	var m map[string]any
+	if err := json.Unmarshal([]byte(raw), &m); err != nil {
+		return raw
+	}
+	redacted := false
+	for k := range m {
+		switch strings.ToLower(strings.TrimSpace(k)) {
+		case "password", "pass", "pin", "secret", "senha":
+			m[k] = "[REDACTED]"
+			redacted = true
+		}
+	}
+	if !redacted {
+		return raw
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		return raw
+	}
+	return string(b)
 }
 
 // LogToolResult records the output (or error) returned by a tool execution.

@@ -15,7 +15,7 @@
 │   │   Frontend (React + Vite)      │   │     Backend (Go)          │   │
 │   │   • Cobalt Lab v2 Dark Design  │IPC│   • Wails v3 Native GTK4  │   │
 │   │   • 60fps CreatureField Canvas │───│   • LangChainGo Agent     │   │
-│   │   • High-Contrast UI Plates    │   │   • 4 Typed SQLite Tools  │   │
+│   │   • High-Contrast UI Plates    │   │   • 5 Typed SQLite Tools  │   │
 │   │   • Markdown + Abbr Semantics  │   │   • modernc.org/sqlite DB │   │
 │   └────────────────────────────────┘   └─────────────┬─────────────┘   │
 └──────────────────────────────────────────────────────┼─────────────────┘
@@ -34,14 +34,14 @@
                                          └───────────────────────────┘
 ```
 
-The architecture is deliberately modular:
-1. **Frontend**: React single page with an ai chat/clear button.
-2. **Backend**: Pure-Go agent using `langchaingo` with 4 typed, read-only tools querying an embedded SQLite database. Runs natively on desktop via Wails v3 (GTK4 + WebKitGTK 6.0) or standalone HTTP mode.
+The architecture is deliberately modular (see [docs/DECISIONS.md](docs/DECISIONS.md) for architectural rationale and trade-offs):
+1. **Frontend**: React single page with an AI chat and clear conversation control.
+2. **Backend**: Pure-Go agent using `langchaingo` with 5 typed SQLite tools (4 read-only inventory tools + `borrow_or_return_gpu` guarded by transactional stock/ownership checks and `GPU_LOAN_PASSWORD` verified inside the store), plus timestamped trace logging (`app/logs/agent-*.log`). Runs natively on desktop via Wails v3 (GTK4 + WebKitGTK 6.0) or standalone HTTP mode.
 3. **LLM Proxy**: Dockerized LiteLLM proxy exposing a standard OpenAI-compatible API to the Go app, routing queries to a local Ollama instance.
 
 ---
 
-## Simulated GPU Inventory / Inventário de GPUs do Laboratório
+## Simulated GPU Inventory 
 
 The local SQLite database initializes idempotently with 5 enterprise NVIDIA GPUs and deterministic allocation states:
 
@@ -53,13 +53,14 @@ The local SQLite database initializes idempotently with 5 enterprise NVIDIA GPUs
 | **NVIDIA H100** | Hopper | 80 GB | Yes (up to 7x) | 2 | 0 | **2** | State-of-the-art Transformer engine training/inference |
 | **NVIDIA A40** | Ampere | 48 GB | No | 4 | 4 | **0** | Virtual workstations, graphics rendering, visual computing |
 
+I took the liberty to add some more info on the GPUs so the assistant can be more helpful when choosing a model.
 ---
 
 ## Prerequisites 
 
 - **Docker & Docker Compose** (for Ollama and LiteLLM)
-- **Go 1.21+**
-- **Node.js 18+ & npm**
+- **Go 1.26+**
+- **Node.js 24+ (or 22.18+) & npm** *(required for native `.ts` execution in `node --test`)*
 - Linux desktop build dependencies:
   - Arch Linux: `sudo pacman -S gtk4 webkitgtk-6.0` (or `gtk3 webkit2gtk-4.1` on older distros)
   - Ubuntu / Debian: `sudo apt-get install -y libgtk-4-dev libwebkitgtk-6.0-dev` (or `libgtk-3-dev libwebkit2gtk-4.1-dev`)
@@ -148,3 +149,22 @@ make build
 ```
 
 ---
+
+## Usage Examples & Trace Logging
+
+Example questions you can ask the assistant (Portuguese or English):
+
+- **"Quais GPUs existem na infraestrutura?"** → Calls `list_gpus` and lists all 5 seeded NVIDIA models (19 total units) with VRAM and simulated availability.
+- **"Qual GPU tem mais memória?"** → Reports the 80 GB per-GPU tie (**NVIDIA A100** and **NVIDIA H100**) as well as the largest aggregate available VRAM pool (**NVIDIA L40S**, 240 GB).
+- **"Existe alguma NVIDIA B200?"** → Calls `get_gpu`, confirms B200 is not in the catalog, and lists the 5 models that exist.
+- **"Quero pegar 1 A100 emprestada (senha: gpu-lab-secret)"** / **"Quero devolver 1 A100 (senha: gpu-lab-secret)"** → Calls `borrow_or_return_gpu`; the backend store validates `GPU_LOAN_PASSWORD`, stock limits, and user loan ownership inside a SQLite transaction.
+
+### Live Debugging / Demo Logs
+
+Every session writes timestamped events (`[USER]`, `[THOUGHT]`, `[TOOL_CALL]` with redacted passwords, `[TOOL_RESULT]`, `[ASSISTANT]`) to `app/logs/agent-YYYYMMDD-HHMMSS.log`:
+
+```bash
+tail -f app/logs/agent-*.log
+```
+
+See [docs/DECISIONS.md](docs/DECISIONS.md) for architecture decisions, limitations, and future work.

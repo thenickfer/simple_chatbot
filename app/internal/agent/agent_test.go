@@ -355,6 +355,7 @@ func TestAgentFallbackJSONToolCallAndProxyDownError(t *testing.T) {
 func TestBorrowOrReturnGPUTool_RailguardsAndFlow(t *testing.T) {
 	ctx := context.Background()
 	st := openTestStore(t)
+	st.SetLoanPassword("cobalt-pass")
 	tool := &BorrowOrReturnGPUTool{store: st}
 
 	callAndDecode := func(input string) borrowOrReturnResponse {
@@ -370,50 +371,60 @@ func TestBorrowOrReturnGPUTool_RailguardsAndFlow(t *testing.T) {
 		return resp
 	}
 
+	// 0. Forbidden: missing or wrong password
+	r := callAndDecode(`{"action":"borrow","name":"A100","quantity":1}`)
+	if r.Allowed || r.ForbiddenRule != "password_required" {
+		t.Fatalf("expected password_required refusal, got: %+v", r)
+	}
+	r = callAndDecode(`{"action":"borrow","name":"A100","quantity":1,"password":"wrong"}`)
+	if r.Allowed || r.ForbiddenRule != "invalid_password" || strings.Contains(r.Message, "cobalt-pass") {
+		t.Fatalf("expected invalid_password refusal without leaking secret, got: %+v", r)
+	}
+
 	// 1. Forbidden: borrow when 0 stock (RTX 4090: 0/3 available)
-	r := callAndDecode(`{"action":"borrow","name":"RTX 4090","quantity":1}`)
+	r = callAndDecode(`{"action":"borrow","name":"RTX 4090","quantity":1,"password":"cobalt-pass"}`)
 	if r.Allowed || r.ForbiddenRule != "no_stock_available" || !strings.Contains(r.Message, "Operation forbidden") {
 		t.Fatalf("expected no_stock_available refusal, got: %+v", r)
 	}
 
 	// 2. Forbidden: return over original stock limit (H100: 2/2 available)
-	r = callAndDecode(`{"action":"return","name":"H100","quantity":1}`)
+	r = callAndDecode(`{"action":"return","name":"H100","quantity":1,"password":"cobalt-pass"}`)
 	if r.Allowed || r.ForbiddenRule != "stock_limit_exceeded" || !strings.Contains(r.Message, "maximum original limit") {
 		t.Fatalf("expected stock_limit_exceeded refusal, got: %+v", r)
 	}
 
 	// 3. Forbidden: return GPU that has in_use > 0 but was NOT borrowed by user (A100: 2/4 in use, 0 borrowed by user)
-	r = callAndDecode(`{"action":"return","name":"A100","quantity":1}`)
+	r = callAndDecode(`{"action":"return","name":"A100","quantity":1,"password":"cobalt-pass"}`)
 	if r.Allowed || r.ForbiddenRule != "not_borrowed_by_user" || !strings.Contains(r.Message, "not borrowed by you") {
 		t.Fatalf("expected not_borrowed_by_user refusal, got: %+v", r)
 	}
 
 	// 4. Allowed: borrow multiple GPUs (2 A100s)
-	r = callAndDecode(`{"action":"borrow","name":"A100","quantity":2}`)
+	r = callAndDecode(`{"action":"borrow","name":"A100","quantity":2,"password":"cobalt-pass"}`)
 	if !r.Allowed || r.GPU == nil || r.GPU.Available != 0 || r.GPU.InUse != 4 || r.BorrowedByUser != 2 {
 		t.Fatalf("expected successful borrow of 2 A100s, got: %+v", r)
 	}
 
 	// 5. Forbidden: return more than borrowed (3 > 2)
-	r = callAndDecode(`{"action":"return","name":"A100","quantity":3}`)
+	r = callAndDecode(`{"action":"return","name":"A100","quantity":3,"password":"cobalt-pass"}`)
 	if r.Allowed || r.ForbiddenRule != "return_exceeds_borrowed" || !strings.Contains(r.Message, "only have 2 unit(s) currently borrowed") {
 		t.Fatalf("expected return_exceeds_borrowed refusal, got: %+v", r)
 	}
 
 	// 6. Allowed: return 1 A100 (partial return)
-	r = callAndDecode(`{"action":"return","name":"A100","quantity":1}`)
+	r = callAndDecode(`{"action":"return","name":"A100","quantity":1,"password":"cobalt-pass"}`)
 	if !r.Allowed || r.GPU == nil || r.GPU.Available != 1 || r.GPU.InUse != 3 || r.BorrowedByUser != 1 {
 		t.Fatalf("expected successful partial return of 1 A100, got: %+v", r)
 	}
 
 	// 7. Forbidden: non-positive quantity
-	r = callAndDecode(`{"action":"borrow","name":"H100","quantity":0}`)
+	r = callAndDecode(`{"action":"borrow","name":"H100","quantity":0,"password":"cobalt-pass"}`)
 	if r.Allowed || r.ForbiddenRule != "invalid_quantity" {
 		t.Fatalf("expected invalid_quantity refusal, got: %+v", r)
 	}
 
 	// 8. Forbidden: unknown GPU
-	r = callAndDecode(`{"action":"borrow","name":"B200","quantity":1}`)
+	r = callAndDecode(`{"action":"borrow","name":"B200","quantity":1,"password":"cobalt-pass"}`)
 	if r.Allowed || r.ForbiddenRule != "gpu_not_found" || len(r.ExistingModels) != 5 {
 		t.Fatalf("expected gpu_not_found refusal with 5 existing models, got: %+v", r)
 	}
