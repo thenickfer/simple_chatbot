@@ -5,6 +5,8 @@
 
 ---
 
+For screenshots/examples, check [Examples](#usage-examples)
+
 ## Architecture Overview / Visão Geral da Arquitetura
 
 ```text
@@ -150,21 +152,19 @@ make build
 
 ---
 
-## Usage Examples & Trace Logging
+## Usage Examples 
 
-Example questions you can ask the assistant (Portuguese or English):
+### Home & Chatting
 
-- **"Quais GPUs existem na infraestrutura?"** → Calls `list_gpus` and lists all 5 seeded NVIDIA models (19 total units) with VRAM and simulated availability.
-- **"Qual GPU tem mais memória?"** → Reports the 80 GB per-GPU tie (**NVIDIA A100** and **NVIDIA H100**) as well as the largest aggregate available VRAM pool (**NVIDIA L40S**, 240 GB).
-- **"Existe alguma NVIDIA B200?"** → Calls `get_gpu`, confirms B200 is not in the catalog, and lists the 5 models that exist.
-- **"Quero pegar 1 A100 emprestada (senha: gpu-lab-secret)"** / **"Quero devolver 1 A100 (senha: gpu-lab-secret)"** → Calls `borrow_or_return_gpu`; the backend store validates `GPU_LOAN_PASSWORD`, stock limits, and user loan ownership inside a SQLite transaction.
+The app consists of a single page, with some initial message suggestions:
+![home screen](screenshots/home.png "Home")
 
-### Live Debugging / Demo Logs
+You can then message the chatbot and ask for questions:
+![chatting](screenshots/msg.png "Chatting")
 
-Every session writes timestamped events (`[USER]`, `[THOUGHT]`, `[TOOL_CALL]` with redacted passwords, `[TOOL_RESULT]`, `[ASSISTANT]`) to `app/logs/agent-YYYYMMDD-HHMMSS.log`:
+### Railguards
 
-```bash
-tail -f app/logs/agent-*.log
-```
+The assistant will never allow the user to "rent" a GPU without both stock and a valid password:
+![No Stock](screenshots/nostock.png "Out Of Inventory")
 
-See [docs/DECISIONS.md](docs/DECISIONS.md) for architecture decisions, limitations, and future work.
+![No Password](screenshots/passw.png "Invalid Password")
