@@ -113,7 +113,7 @@ func (a *Agent) Chat(ctx context.Context, userText string) (Response, error) {
 			ctx,
 			convo,
 			llms.WithTools(a.llmTools),
-			llms.WithTemperature(0.0),
+			llms.WithTemperature(0.2),
 		)
 		llmDur := time.Since(llmStart)
 		if err != nil {
